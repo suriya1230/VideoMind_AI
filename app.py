@@ -296,14 +296,3 @@ def translate():
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=5000)
-```
-
----
-
-**Update `requirements.txt`** — remove heavy packages:
-```
-flask
-flask-cors
-groq
-yt-dlp
-gunicorn
