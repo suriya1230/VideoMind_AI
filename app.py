@@ -118,6 +118,20 @@ def detect_video_type(transcript, title):
     return "educational"
 
 # ─── Routes ─────────────────────────────────────────────────────────────────
+@app.route("/")
+def home():
+    return jsonify({
+        "status" : "✅ VideoMind AI Backend is running",
+        "version": "2.0",
+        "routes" : [
+            "POST /api/process-url",
+            "POST /api/process-file",
+            "POST /api/summarize",
+            "POST /api/ask",
+            "POST /api/translate",
+            "GET  /api/health"
+        ]
+    })
 
 @app.route("/api/health")
 def health():
