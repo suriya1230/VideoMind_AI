@@ -145,7 +145,7 @@ def process_url():
 
         import yt_dlp
         out     = os.path.join(tempfile.gettempdir(), "audio_raw")
-        cookies = "/app/cookies.txt"
+        cookies = "/etc/secrets/cookies.txt"
 
         opts = {
             "format"    :"bestaudio/best/worstaudio/worst",
