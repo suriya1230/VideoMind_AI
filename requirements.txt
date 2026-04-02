@@ -1,0 +1,7 @@
+flask
+flask-cors
+faster-whisper
+groq
+yt-dlp
+torch
+gunicorn

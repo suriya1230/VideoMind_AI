@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>VideoMind AI — Instant Video Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg:       #080b12;
+  --surface:  #0d1117;
+  --glass:    rgba(255,255,255,0.04);
+  --border:   rgba(255,255,255,0.08);
+  --accent:   #00f5a0;
+  --accent2:  #00d4ff;
+  --accent3:  #ff6b6b;
+  --gold:     #ffd700;
+  --text:     #e8eaf0;
+  --muted:    #6b7280;
+  --card-bg:  rgba(13,17,23,0.8);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:'DM Sans',sans-serif;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* ── Animated Background ── */
+.bg-grid{
+  position:fixed;inset:0;z-index:0;
+  background-image:
+    linear-gradient(rgba(0,245,160,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,245,160,0.03) 1px, transparent 1px);
+  background-size:60px 60px;
+  animation:gridMove 20s linear infinite;
+}
+@keyframes gridMove{0%{background-position:0 0;}100%{background-position:60px 60px;}}
+
+.bg-orbs{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;}
+.orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:0.15;animation:float 8s ease-in-out infinite;}
+.orb1{width:500px;height:500px;background:var(--accent);top:-100px;left:-100px;animation-delay:0s;}
+.orb2{width:400px;height:400px;background:var(--accent2);bottom:-100px;right:-100px;animation-delay:3s;}
+.orb3{width:300px;height:300px;background:#8b5cf6;top:50%;left:50%;transform:translate(-50%,-50%);animation-delay:6s;}
+@keyframes float{0%,100%{transform:translateY(0) scale(1);}50%{transform:translateY(-30px) scale(1.05);}}
+
+/* ── Noise texture overlay ── */
+body::after{
+  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  opacity:0.4;
+}
+
+/* ── Layout ── */
+#app{position:relative;z-index:2;min-height:100vh;}
+
+/* ── Hero Header ── */
+header{
+  padding:3rem 2rem 2rem;
+  text-align:center;
+  position:relative;
+}
+.logo-badge{
+  display:inline-flex;align-items:center;gap:0.5rem;
+  background:rgba(0,245,160,0.1);border:1px solid rgba(0,245,160,0.3);
+  padding:0.3rem 1rem;border-radius:20px;font-size:0.75rem;
+  color:var(--accent);letter-spacing:0.15em;text-transform:uppercase;
+  margin-bottom:1.5rem;font-family:'JetBrains Mono',monospace;
+  animation:fadeDown 0.6s ease;
+}
+.logo-dot{width:6px;height:6px;background:var(--accent);border-radius:50%;animation:pulse 2s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.5;transform:scale(0.8);}}
+
+h1.hero-title{
+  font-family:'Syne',sans-serif;
+  font-size:clamp(2.5rem,6vw,5rem);
+  font-weight:800;
+  line-height:1.05;
+  letter-spacing:-0.02em;
+  animation:fadeUp 0.7s ease 0.1s both;
+}
+.hero-title .word-ai{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.hero-sub{
+  color:var(--muted);font-size:1.1rem;margin-top:1rem;
+  animation:fadeUp 0.7s ease 0.2s both;
+}
+
+/* ── Step indicator ── */
+.steps-bar{
+  display:flex;justify-content:center;align-items:center;
+  gap:0;margin:2rem auto;max-width:600px;
+  animation:fadeUp 0.7s ease 0.3s both;
+}
+.step-item{
+  display:flex;flex-direction:column;align-items:center;gap:0.4rem;
+  flex:1;position:relative;
+}
+.step-item:not(:last-child)::after{
+  content:'';position:absolute;top:16px;left:calc(50% + 16px);
+  right:calc(-50% + 16px);height:1px;
+  background:linear-gradient(90deg,var(--border),var(--border));
+  transition:background 0.5s;
+}
+.step-item.done:not(:last-child)::after{background:linear-gradient(90deg,var(--accent),var(--accent2));}
+.step-circle{
+  width:32px;height:32px;border-radius:50%;
+  border:1px solid var(--border);background:var(--surface);
+  display:flex;align-items:center;justify-content:center;
+  font-size:0.7rem;color:var(--muted);font-family:'Syne',sans-serif;font-weight:700;
+  transition:all 0.4s;
+}
+.step-item.active .step-circle{border-color:var(--accent);color:var(--accent);box-shadow:0 0 16px rgba(0,245,160,0.3);}
+.step-item.done .step-circle{background:var(--accent);color:#000;border-color:var(--accent);}
+.step-label{font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;text-transform:uppercase;}
+.step-item.active .step-label{color:var(--accent);}
+.step-item.done .step-label{color:var(--text);}
+
+/* ── Main Card ── */
+.main-card{
+  max-width:860px;margin:0 auto 4rem;padding:0 1.5rem;
+  animation:fadeUp 0.7s ease 0.4s both;
+}
+
+/* ── Glass Panel ── */
+.glass{
+  background:var(--glass);
+  border:1px solid var(--border);
+  border-radius:20px;
+  backdrop-filter:blur(20px);
+  padding:2.5rem;
+  position:relative;
+  overflow:hidden;
+}
+.glass::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(0,245,160,0.03),transparent,rgba(0,212,255,0.03));
+  pointer-events:none;
+}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:0.5rem;margin-bottom:2rem;background:rgba(0,0,0,0.3);padding:4px;border-radius:12px;}
+.tab-btn{
+  flex:1;padding:0.7rem;border:none;border-radius:9px;background:transparent;
+  color:var(--muted);cursor:pointer;font-family:'Syne',sans-serif;font-weight:600;
+  font-size:0.85rem;letter-spacing:0.03em;transition:all 0.3s;
+}
+.tab-btn.active{background:rgba(0,245,160,0.15);color:var(--accent);box-shadow:0 0 20px rgba(0,245,160,0.1);}
+
+/* ── Input ── */
+.input-group{display:flex;flex-direction:column;gap:1rem;}
+.url-input{
+  width:100%;padding:1rem 1.2rem;
+  background:rgba(0,0,0,0.4);
+  border:1px solid var(--border);border-radius:12px;
+  color:var(--text);font-family:'DM Sans',sans-serif;font-size:0.95rem;
+  outline:none;transition:border-color 0.3s,box-shadow 0.3s;
+}
+.url-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,245,160,0.1);}
+.url-input::placeholder{color:var(--muted);}
+
+/* ── Buttons ── */
+.btn-primary{
+  padding:1rem 2rem;border:none;border-radius:12px;cursor:pointer;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#000;font-family:'Syne',sans-serif;font-weight:700;
+  font-size:0.95rem;letter-spacing:0.03em;
+  transition:all 0.3s;position:relative;overflow:hidden;
+}
+.btn-primary::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(255,255,255,0.2),transparent);
+  transform:translateX(-100%);transition:transform 0.4s;
+}
+.btn-primary:hover::before{transform:translateX(0);}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(0,245,160,0.4);}
+.btn-primary:disabled{opacity:0.5;cursor:not-allowed;transform:none;}
+
+.btn-secondary{
+  padding:0.6rem 1.2rem;border:1px solid var(--border);border-radius:8px;
+  background:transparent;color:var(--muted);cursor:pointer;
+  font-family:'DM Sans',sans-serif;font-size:0.85rem;transition:all 0.3s;
+}
+.btn-secondary:hover{border-color:var(--accent2);color:var(--accent2);}
+
+/* ── File drop zone ── */
+.drop-zone{
+  border:2px dashed var(--border);border-radius:16px;padding:3rem;
+  text-align:center;cursor:pointer;transition:all 0.3s;
+  background:rgba(0,0,0,0.2);
+}
+.drop-zone:hover,.drop-zone.drag-over{border-color:var(--accent);background:rgba(0,245,160,0.05);}
+.drop-icon{font-size:3rem;margin-bottom:1rem;display:block;}
+.drop-label{color:var(--muted);font-size:0.9rem;}
+.drop-label span{color:var(--accent);font-weight:500;}
+#file-input{display:none;}
+
+/* ── Loading ── */
+.loading-overlay{text-align:center;padding:3rem 0;}
+.loader-ring{
+  width:60px;height:60px;margin:0 auto 1.5rem;
+  border-radius:50%;
+  border:3px solid rgba(0,245,160,0.1);
+  border-top:3px solid var(--accent);
+  border-right:3px solid var(--accent2);
+  animation:spin 1s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+.loading-text{
+  font-family:'JetBrains Mono',monospace;font-size:0.85rem;
+  color:var(--accent);letter-spacing:0.05em;
+}
+.loading-sub{color:var(--muted);font-size:0.8rem;margin-top:0.5rem;}
+
+/* ── Progress bar ── */
+.progress-bar{
+  height:2px;background:rgba(0,245,160,0.1);border-radius:1px;
+  margin-top:1rem;overflow:hidden;
+}
+.progress-fill{
+  height:100%;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  animation:progressAnim 2s ease-in-out infinite;
+}
+@keyframes progressAnim{0%{width:0%;margin-left:0;}50%{width:70%;margin-left:0;}100%{width:0%;margin-left:100%;}}
+
+/* ── Results ── */
+.result-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem;
+}
+.video-badge{
+  display:flex;align-items:center;gap:0.5rem;
+  background:rgba(0,245,160,0.1);border:1px solid rgba(0,245,160,0.2);
+  padding:0.4rem 0.9rem;border-radius:20px;
+  font-size:0.8rem;color:var(--accent);font-family:'JetBrains Mono',monospace;
+}
+.video-meta{color:var(--muted);font-size:0.85rem;}
+.video-title{font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:700;margin-bottom:0.25rem;}
+
+/* ── Type chips ── */
+.type-chip{
+  display:inline-flex;align-items:center;gap:0.4rem;
+  padding:0.3rem 0.8rem;border-radius:20px;font-size:0.75rem;font-weight:600;
+}
+.type-educational{background:rgba(0,245,160,0.15);color:var(--accent);border:1px solid rgba(0,245,160,0.3);}
+.type-song{background:rgba(255,107,107,0.15);color:var(--accent3);border:1px solid rgba(255,107,107,0.3);}
+.type-movie{background:rgba(255,215,0,0.15);color:var(--gold);border:1px solid rgba(255,215,0,0.3);}
+
+/* ── Summary ── */
+.summary-box{
+  background:rgba(0,0,0,0.3);border:1px solid var(--border);
+  border-radius:16px;padding:1.5rem;
+  line-height:1.8;color:var(--text);font-size:0.95rem;
+  white-space:pre-wrap;
+}
+.summary-box p{margin-bottom:0.5rem;}
+
+/* ── Section title ── */
+.section-title{
+  font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:700;
+  display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;
+}
+.section-title .icon{
+  width:28px;height:28px;background:rgba(0,245,160,0.15);
+  border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:0.9rem;
+}
+
+/* ── Chat Q&A ── */
+.chat-box{
+  background:rgba(0,0,0,0.3);border:1px solid var(--border);
+  border-radius:16px;overflow:hidden;margin-bottom:1rem;
+}
+.chat-messages{
+  height:280px;overflow-y:auto;padding:1.2rem;
+  display:flex;flex-direction:column;gap:0.8rem;
+}
+.chat-messages::-webkit-scrollbar{width:4px;}
+.chat-messages::-webkit-scrollbar-track{background:transparent;}
+.chat-messages::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+
+.msg{
+  max-width:80%;padding:0.75rem 1rem;border-radius:16px;
+  font-size:0.88rem;line-height:1.6;animation:msgPop 0.3s ease;
+  white-space:pre-wrap;
+}
+@keyframes msgPop{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+.msg-user{
+  align-self:flex-end;
+  background:linear-gradient(135deg,rgba(0,245,160,0.2),rgba(0,212,255,0.2));
+  border:1px solid rgba(0,245,160,0.3);color:var(--text);
+  border-bottom-right-radius:4px;
+}
+.msg-ai{
+  align-self:flex-start;
+  background:rgba(255,255,255,0.05);border:1px solid var(--border);
+  color:var(--text);border-bottom-left-radius:4px;
+}
+.msg-thinking{color:var(--muted);font-style:italic;font-size:0.82rem;}
+
+.chat-input-row{
+  display:flex;border-top:1px solid var(--border);
+}
+.chat-input{
+  flex:1;padding:0.9rem 1rem;background:transparent;
+  border:none;color:var(--text);font-family:'DM Sans',sans-serif;font-size:0.9rem;outline:none;
+}
+.chat-send{
+  padding:0.9rem 1.3rem;background:rgba(0,245,160,0.1);
+  border:none;border-left:1px solid var(--border);color:var(--accent);
+  cursor:pointer;font-size:1rem;transition:background 0.2s;
+}
+.chat-send:hover{background:rgba(0,245,160,0.2);}
+.empty-chat{color:var(--muted);font-size:0.85rem;text-align:center;margin:auto;}
+
+/* ── Language chips ── */
+.lang-chips{display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;}
+.lang-chip{
+  padding:0.4rem 0.9rem;border-radius:20px;border:1px solid var(--border);
+  background:rgba(0,0,0,0.3);color:var(--muted);cursor:pointer;
+  font-size:0.8rem;transition:all 0.2s;
+}
+.lang-chip:hover{border-color:var(--accent2);color:var(--accent2);}
+.lang-chip.selected{background:rgba(0,212,255,0.15);border-color:var(--accent2);color:var(--accent2);}
+
+.custom-lang{
+  width:100%;padding:0.75rem 1rem;background:rgba(0,0,0,0.3);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);
+  font-family:'DM Sans',sans-serif;font-size:0.9rem;outline:none;margin-bottom:1rem;
+  transition:border-color 0.2s;
+}
+.custom-lang:focus{border-color:var(--accent2);}
+
+.translation-result{
+  background:rgba(0,0,0,0.3);border:1px solid rgba(0,212,255,0.2);
+  border-radius:12px;padding:1.2rem;margin-top:1rem;
+  font-size:0.9rem;line-height:1.8;color:var(--text);white-space:pre-wrap;
+  animation:fadeUp 0.4s ease;
+}
+.copy-btn{
+  display:flex;align-items:center;gap:0.4rem;margin-top:0.75rem;
+  padding:0.4rem 0.9rem;border:1px solid var(--border);border-radius:8px;
+  background:transparent;color:var(--muted);cursor:pointer;font-size:0.8rem;
+  transition:all 0.2s;width:fit-content;
+}
+.copy-btn:hover{border-color:var(--accent);color:var(--accent);}
+
+/* ── Song / Movie cards ── */
+.song-card{
+  background:linear-gradient(135deg,rgba(255,107,107,0.1),rgba(255,107,107,0.05));
+  border:1px solid rgba(255,107,107,0.2);border-radius:16px;padding:2rem;text-align:center;
+}
+.song-card .big-icon{font-size:3rem;margin-bottom:1rem;}
+.song-card h3{font-family:'Syne',sans-serif;font-size:1.3rem;margin-bottom:0.5rem;color:var(--accent3);}
+.song-card p{color:var(--muted);font-size:0.9rem;}
+
+.reset-btn{
+  width:100%;margin-top:2rem;padding:0.9rem;
+  background:transparent;border:1px solid var(--border);border-radius:12px;
+  color:var(--muted);cursor:pointer;font-family:'Syne',sans-serif;font-weight:600;
+  font-size:0.9rem;letter-spacing:0.03em;transition:all 0.3s;
+}
+.reset-btn:hover{border-color:var(--accent);color:var(--accent);box-shadow:0 0 20px rgba(0,245,160,0.1);}
+
+/* ── Error ── */
+.error-box{
+  background:rgba(255,107,107,0.1);border:1px solid rgba(255,107,107,0.3);
+  border-radius:10px;padding:1rem 1.2rem;color:var(--accent3);
+  font-size:0.88rem;margin-top:1rem;
+}
+
+/* ── Divider ── */
+.divider{height:1px;background:var(--border);margin:2rem 0;}
+
+/* ── Animations ── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@keyframes fadeDown{from{opacity:0;transform:translateY(-10px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── Footer ── */
+footer{
+  text-align:center;padding:2rem;color:var(--muted);font-size:0.8rem;
+  border-top:1px solid var(--border);
+  font-family:'JetBrains Mono',monospace;
+}
+
+/* ── Responsive ── */
+@media(max-width:600px){
+  .glass{padding:1.5rem;}
+  h1.hero-title{font-size:2.2rem;}
+}
+</style>
+</head>
+<body>
+<div class="bg-grid"></div>
+<div class="bg-orbs">
+  <div class="orb orb1"></div>
+  <div class="orb orb2"></div>
+  <div class="orb orb3"></div>
+</div>
+
+<div id="app">
+  <header>
+    <div class="logo-badge"><span class="logo-dot"></span> VideoMind AI · v2.0</div>
+    <h1 class="hero-title">Video <span class="word-ai">Intelligence</span><br/>Reimagined</h1>
+    <p class="hero-sub">Paste a YouTube link or upload a video - get instant summaries, answers & translations</p>
+  </header>
+
+  <!-- Step Bar -->
+  <div class="steps-bar" id="steps-bar">
+    <div class="step-item active" id="step-0">
+      <div class="step-circle">01</div>
+      <div class="step-label">Input</div>
+    </div>
+    <div class="step-item" id="step-1">
+      <div class="step-circle">02</div>
+      <div class="step-label">Analyze</div>
+    </div>
+    <div class="step-item" id="step-2">
+      <div class="step-circle">03</div>
+      <div class="step-label">Summary</div>
+    </div>
+    <div class="step-item" id="step-3">
+      <div class="step-circle">04</div>
+      <div class="step-label">Q&A + Translate</div>
+    </div>
+  </div>
+
+  <div class="main-card">
+    <div class="glass" id="main-panel">
+
+      <!-- ── INPUT PANEL ── -->
+      <div id="panel-input">
+        <div class="tabs">
+          <button class="tab-btn active" onclick="switchTab('url')">🔗 YouTube URL</button>
+          <button class="tab-btn" onclick="switchTab('file')">📁 Upload File</button>
+        </div>
+
+        <!-- URL tab -->
+        <div id="tab-url" class="input-group">
+          <input class="url-input" id="url-input" type="text"
+            placeholder="https://www.youtube.com/watch?v=..."
+            onkeydown="if(event.key==='Enter') processURL()"/>
+          <button class="btn-primary" onclick="processURL()">
+             Analyze Video
+          </button>
+        </div>
+
+        <!-- File tab -->
+        <div id="tab-file" style="display:none;">
+          <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
+            ondragover="event.preventDefault();this.classList.add('drag-over')"
+            ondragleave="this.classList.remove('drag-over')"
+            ondrop="handleDrop(event)">
+            <span class="drop-icon">🎬</span>
+            <div class="drop-label">Drop your video here or <span>click to browse</span></div>
+            <div class="drop-label" style="margin-top:0.5rem;font-size:0.78rem;">MP4, MOV, AVI, MKV supported</div>
+          </div>
+          <input type="file" id="file-input" accept="video/*" onchange="handleFile(this.files[0])"/>
+          <div id="file-name" style="margin-top:0.75rem;font-size:0.85rem;color:var(--accent);display:none;"></div>
+          <button class="btn-primary" id="upload-btn" style="margin-top:1rem;display:none;" onclick="processFile()">
+             Upload & Analyze
+          </button>
+        </div>
+        <div id="input-error" class="error-box" style="display:none;"></div>
+      </div>
+
+      <!-- ── LOADING PANEL ── -->
+      <div id="panel-loading" style="display:none;">
+        <div class="loading-overlay">
+          <div class="loader-ring"></div>
+          <div class="loading-text" id="loading-text">Processing...</div>
+          <div class="loading-sub" id="loading-sub">This may take a moment</div>
+          <div class="progress-bar"><div class="progress-fill"></div></div>
+        </div>
+      </div>
+
+      <!-- ── RESULTS PANEL ── -->
+      <div id="panel-results" style="display:none;">
+
+        <!-- Video info -->
+        <div class="result-header">
+          <div>
+            <div class="video-title" id="r-title">—</div>
+            <div class="video-meta" id="r-meta">—</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.4rem;">
+            <div class="video-badge" id="r-type-badge">—</div>
+            <div class="type-chip" id="r-vtype">—</div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Song message -->
+        <div id="panel-song" style="display:none;">
+          <div class="song-card">
+            <div class="big-icon">🎵</div>
+            <h3>Song Detected</h3>
+            <p>This is a music video — summarization is not available.<br/>You can still use Q&A below to ask about the lyrics or artist.</p>
+          </div>
+        </div>
+
+        <!-- Summary -->
+        <div id="panel-summary">
+          <div class="section-title">
+            <div class="icon">📋</div> Summary
+            <span id="summary-meta" style="font-size:0.75rem;color:var(--muted);font-family:'JetBrains Mono',monospace;font-weight:400;"></span>
+          </div>
+          <div class="summary-box" id="r-summary">Generating...</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Q&A -->
+        <div>
+          <div class="section-title"><div class="icon">❓</div> Ask Anything</div>
+          <div class="chat-box">
+            <div class="chat-messages" id="chat-messages">
+              <div class="empty-chat">Ask about the video, or any general topic or code question...</div>
+            </div>
+            <div class="chat-input-row">
+              <input class="chat-input" id="chat-input" placeholder="Type your question..."
+                onkeydown="if(event.key==='Enter') sendQuestion()"/>
+              <button class="chat-send" onclick="sendQuestion()">➤</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Translation -->
+        <div>
+          <div class="section-title"><div class="icon">🌐</div> Translate Summary</div>
+          <div class="lang-chips" id="lang-chips">
+            <div class="lang-chip" onclick="selectLang(this,'Tamil')">Tamil</div>
+            <div class="lang-chip" onclick="selectLang(this,'Hindi')">Hindi</div>
+            <div class="lang-chip" onclick="selectLang(this,'Telugu')">Telugu</div>
+            <div class="lang-chip" onclick="selectLang(this,'French')">French</div>
+            <div class="lang-chip" onclick="selectLang(this,'Spanish')">Spanish</div>
+            <div class="lang-chip" onclick="selectLang(this,'Arabic')">Arabic</div>
+            <div class="lang-chip" onclick="selectLang(this,'Japanese')">Japanese</div>
+            <div class="lang-chip" onclick="selectLang(this,'German')">German</div>
+          </div>
+          <input class="custom-lang" id="custom-lang" placeholder="Or type any language (e.g. Kannada, Korean...)"/>
+          <button class="btn-primary" onclick="doTranslate()" style="width:100%;">🌐 Translate</button>
+          <div id="translation-result" style="display:none;">
+            <div class="translation-result" id="translation-text"></div>
+            <button class="copy-btn" onclick="copyTranslation()">📋 Copy translation</button>
+          </div>
+        </div>
+
+        <button class="reset-btn" onclick="reset()">➕ Analyze Another Video</button>
+      </div>
+
+    </div><!-- .glass -->
+  </div><!-- .main-card -->
+
+  <footer>VideoMind AI · Powered by Whisper + Groq LLaMA · Built with SURIYA</footer>
+</div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const API = 'https://your-backend.onrender.com'; // ← change after deploy
+
+// ── State ───────────────────────────────────────────────────────────────────
+let state = { transcript:'', summary:'', videoType:'', selectedLang:'' };
+let selectedFile = null;
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function showPanel(name) {
+  ['input','loading','results'].forEach(p => $('panel-'+p).style.display = 'none');
+  $('panel-'+name).style.display = 'block';
+}
+
+function setStep(n) {
+  for(let i=0;i<4;i++){
+    const el = $('step-'+i);
+    el.className = 'step-item' + (i<n?' done':i===n?' active':'');
+  }
+}
+
+function setLoading(text, sub) {
+  $('loading-text').textContent = text;
+  $('loading-sub').textContent  = sub || 'Please wait...';
+  showPanel('loading');
+}
+
+function showError(msg) {
+  const el = $('input-error');
+  el.textContent = '⚠ ' + msg;
+  el.style.display = 'block';
+  setTimeout(()=>el.style.display='none', 5000);
+}
+
+// ── Tab switching ────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach((b,i)=>
+    b.classList.toggle('active', (i===0&&tab==='url')||(i===1&&tab==='file')));
+  $('tab-url').style.display  = tab==='url'  ? 'flex':'none';
+  $('tab-file').style.display = tab==='file' ? 'block':'none';
+  $('tab-url').style.flexDirection = 'column';
+}
+
+// ── File handling ────────────────────────────────────────────────────────────
+function handleDrop(e) {
+  e.preventDefault();
+  $('drop-zone').classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if(f && f.type.startsWith('video/')) setSelectedFile(f);
+}
+function handleFile(f) { if(f) setSelectedFile(f); }
+function setSelectedFile(f) {
+  selectedFile = f;
+  $('file-name').textContent = '✓ ' + f.name + ' (' + (f.size/1024/1024).toFixed(1) + ' MB)';
+  $('file-name').style.display = 'block';
+  $('upload-btn').style.display = 'block';
+}
+
+// ── Process URL ──────────────────────────────────────────────────────────────
+async function processURL() {
+  const url = $('url-input').value.trim();
+  if(!url) return showError('Please enter a YouTube URL');
+  setStep(1);
+  setLoading('⬇ Downloading audio from YouTube...', 'Extracting and transcribing...');
+  try {
+    const r = await fetch(API+'/api/process-url',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url})
+    });
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    await handleProcessed(d);
+  } catch(e) {
+    setStep(0); showPanel('input'); showError(e.message);
+  }
+}
+
+// ── Process File ──────────────────────────────────────────────────────────────
+async function processFile() {
+  if(!selectedFile) return showError('Please select a video file');
+  setStep(1);
+  setLoading('📤 Uploading and transcribing...', 'This may take a few minutes for large files');
+  try {
+    const form = new FormData();
+    form.append('video', selectedFile);
+    const r = await fetch(API+'/api/process-file',{method:'POST',body:form});
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    await handleProcessed(d);
+  } catch(e) {
+    setStep(0); showPanel('input'); showError(e.message);
+  }
+}
+
+// ── After processing ──────────────────────────────────────────────────────────
+async function handleProcessed(d) {
+  state.transcript = d.transcript;
+  state.videoType  = d.video_type;
+  setStep(2);
+  setLoading('✍ Generating summary...', 'Analyzing content and creating insights');
+
+  // Populate video info
+  $('r-title').textContent    = d.video_title || 'Unknown';
+  $('r-meta').textContent     = [d.channel, d.duration, d.word_count+' words', d.detected_language?.toUpperCase()].filter(Boolean).join(' · ');
+  $('r-type-badge').textContent = d.video_type?.toUpperCase() || '—';
+
+  const typeMap = {song:'type-song',movie:'type-movie',educational:'type-educational'};
+  const typeLabel= {song:'🎵 Song',movie:'🎬 Movie',educational:'📚 Educational'};
+  $('r-vtype').className = 'type-chip '+(typeMap[d.video_type]||'type-educational');
+  $('r-vtype').textContent = typeLabel[d.video_type]||'📚 Educational';
+
+  // Get summary
+  try {
+    const r = await fetch(API+'/api/summarize',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({transcript:d.transcript,video_title:d.video_title,video_type:d.video_type})
+    });
+    const s = await r.json();
+
+    if(d.video_type==='song') {
+      $('panel-song').style.display='block';
+      $('panel-summary').style.display='none';
+    } else {
+      $('panel-song').style.display='none';
+      $('panel-summary').style.display='block';
+      state.summary = s.summary || s.message || '';
+      $('r-summary').textContent = state.summary;
+      $('summary-meta').textContent = s.word_count ? `· ${s.word_count} words analyzed` : '';
+    }
+  } catch(e) {
+    $('r-summary').textContent = 'Summary generation failed. You can still use Q&A.';
+  }
+
+  setStep(3);
+  showPanel('results');
+}
+
+// ── Q&A ───────────────────────────────────────────────────────────────────────
+async function sendQuestion() {
+  const q = $('chat-input').value.trim();
+  if(!q) return;
+  $('chat-input').value = '';
+
+  // Clear placeholder
+  const msgs = $('chat-messages');
+  const placeholder = msgs.querySelector('.empty-chat');
+  if(placeholder) placeholder.remove();
+
+  // User bubble
+  const userMsg = document.createElement('div');
+  userMsg.className='msg msg-user'; userMsg.textContent=q;
+  msgs.appendChild(userMsg);
+
+  // Thinking
+  const thinking = document.createElement('div');
+  thinking.className='msg msg-ai msg-thinking'; thinking.textContent='Thinking...';
+  msgs.appendChild(thinking);
+  msgs.scrollTop=msgs.scrollHeight;
+
+  try {
+    const r = await fetch(API+'/api/ask',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({transcript:state.transcript, question:q})
+    });
+    const d = await r.json();
+    thinking.className='msg msg-ai';
+    thinking.textContent = d.answer || d.error || 'No answer.';
+  } catch(e) {
+    thinking.textContent='Error: '+e.message;
+  }
+  msgs.scrollTop=msgs.scrollHeight;
+}
+
+// ── Translation ────────────────────────────────────────────────────────────────
+function selectLang(el, lang) {
+  document.querySelectorAll('.lang-chip').forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  state.selectedLang = lang;
+  $('custom-lang').value = '';
+}
+
+async function doTranslate() {
+  const lang = $('custom-lang').value.trim() || state.selectedLang;
+  if(!lang) return;
+  if(!state.summary) return;
+
+  try {
+    const r = await fetch(API+'/api/translate',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({summary:state.summary, language:lang})
+    });
+    const d = await r.json();
+    $('translation-text').textContent = d.translated || d.error;
+    $('translation-result').style.display='block';
+  } catch(e) {
+    $('translation-text').textContent = 'Translation failed: '+e.message;
+    $('translation-result').style.display='block';
+  }
+}
+
+function copyTranslation() {
+  navigator.clipboard.writeText($('translation-text').textContent);
+  const btn=document.querySelector('.copy-btn');
+  btn.textContent='✓ Copied!';
+  setTimeout(()=>btn.textContent='📋 Copy translation',2000);
+}
+
+// ── Reset ──────────────────────────────────────────────────────────────────────
+function reset() {
+  state = {transcript:'',summary:'',videoType:'',selectedLang:''};
+  selectedFile = null;
+  $('url-input').value='';
+  $('chat-messages').innerHTML='<div class="empty-chat">Ask about the video, or any general topic or code question...</div>';
+  $('translation-result').style.display='none';
+  $('r-summary').textContent='Generating...';
+  document.querySelectorAll('.lang-chip').forEach(c=>c.classList.remove('selected'));
+  $('file-name').style.display='none';
+  $('upload-btn').style.display='none';
+  setStep(0);
+  showPanel('input');
+  switchTab('url');
+  window.scrollTo(0,0);
+}
+</script>
+</body>
+</html>
