@@ -1,31 +1,80 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import torch, re, os, tempfile
+import os, re, tempfile
 from collections import Counter
 from groq import Groq
 
 app = Flask(__name__)
 CORS(app)
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "your_groq_api_key_here")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "your_key_here")
 
-# Load Whisper once at startup
-print("Loading Whisper model...")
-try:
-    from faster_whisper import WhisperModel
-    device       = "cuda" if torch.cuda.is_available() else "cpu"
-    compute_type = "float16" if device == "cuda" else "int8"
-    whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
-    print(f"✅ faster-whisper loaded on {device}")
-    USE_FASTER = True
-except:
-    import whisper
-    whisper_model = whisper.load_model("small")
-    USE_FASTER = False
-    print("✅ whisper loaded on CPU")
+# ✅ No Whisper model loaded — uses Groq API instead (zero RAM)
+print("✅ Backend ready — using Groq Whisper API")
+
+# ─── Transcribe using Groq Whisper API ──────────────────────────────────────
+def do_transcribe(audio_path):
+    """
+    Uses Groq's free Whisper API — no local model needed.
+    Groq supports files up to 25MB.
+    For larger files we split into chunks.
+    """
+    client    = Groq(api_key=GROQ_API_KEY)
+    file_size = os.path.getsize(audio_path) / (1024*1024)  # MB
+
+    print(f"   Audio size: {file_size:.1f} MB")
+
+    if file_size <= 24:
+        # ✅ Small file — send directly
+        with open(audio_path, "rb") as f:
+            result = client.audio.transcriptions.create(
+                file            = (os.path.basename(audio_path), f),
+                model           = "whisper-large-v3",
+                response_format = "verbose_json",
+            )
+        return result.text.strip(), result.language
+
+    else:
+        # ✅ Large file — split into 20MB chunks using ffmpeg
+        print("   Large file — splitting into chunks...")
+        chunks      = []
+        chunk_dur   = 600  # 10 minutes per chunk in seconds
+        chunk_index = 0
+        transcripts = []
+
+        # Get total duration
+        import subprocess
+        probe = subprocess.run([
+            "ffprobe","-v","quiet","-show_entries","format=duration",
+            "-of","default=noprint_wrappers=1:nokey=1", audio_path
+        ], capture_output=True, text=True)
+        total_dur = float(probe.stdout.strip())
+
+        start = 0
+        while start < total_dur:
+            chunk_file = os.path.join(tempfile.gettempdir(), f"chunk_{chunk_index}.wav")
+            os.system(f"ffmpeg -i '{audio_path}' -ss {start} -t {chunk_dur} "
+                      f"-ar 16000 -ac 1 '{chunk_file}' -y -q:a 0 2>/dev/null")
+
+            if os.path.exists(chunk_file):
+                chunks.append(chunk_file)
+                with open(chunk_file, "rb") as f:
+                    r = client.audio.transcriptions.create(
+                        file            = (f"chunk_{chunk_index}.wav", f),
+                        model           = "whisper-large-v3",
+                        response_format = "verbose_json",
+                    )
+                transcripts.append(r.text)
+                lang = r.language
+                os.remove(chunk_file)
+                print(f"   Chunk {chunk_index+1} done")
+
+            start        += chunk_dur
+            chunk_index  += 1
+
+        return " ".join(transcripts).strip(), lang
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
-
 def clean_transcript(text):
     fillers = [
         r"\bum+\b",r"\buh+\b",r"\bumm+\b",r"\bokay+\b",r"\bright\b",
@@ -35,12 +84,14 @@ def clean_transcript(text):
     for f in fillers:
         text = re.sub(f, "", text, flags=re.IGNORECASE)
     text = re.sub(r'\b(\w+)(\s+\1){1,}\b', r'\1', text, flags=re.IGNORECASE)
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
-    counts = Counter(words)
+    words     = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
+    counts    = Counter(words)
     threshold = max(20, int(len(words)*0.015))
-    whitelist = {"the","and","that","this","with","from","have","will","are",
-                 "for","not","can","you","your","they","about","what","when",
-                 "how","all","also","use","data","model","video","language"}
+    whitelist = {
+        "the","and","that","this","with","from","have","will","are",
+        "for","not","can","you","your","they","about","what","when",
+        "how","all","also","use","data","model","video","language"
+    }
     for w,c in counts.items():
         if c > threshold and w not in whitelist:
             text = re.sub(rf'\b{re.escape(w)}\b', '', text, flags=re.IGNORECASE)
@@ -66,20 +117,11 @@ def detect_video_type(transcript, title):
     if "movie" in cat: return "movie"
     return "educational"
 
-def do_transcribe(audio_path):
-    if USE_FASTER:
-        segs, info = whisper_model.transcribe(audio_path, beam_size=5,
-                         vad_filter=True, condition_on_previous_text=False)
-        return " ".join(s.text for s in segs).strip(), info.language
-    else:
-        r = whisper_model.transcribe(audio_path, fp16=False)
-        return r["text"].strip(), r.get("language","en")
-
 # ─── Routes ─────────────────────────────────────────────────────────────────
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status":"ok","device":device if USE_FASTER else "cpu"})
+    return jsonify({"status":"ok","mode":"groq-whisper-api"})
 
 @app.route("/api/process-url", methods=["POST"])
 def process_url():
@@ -88,66 +130,103 @@ def process_url():
         if not url: return jsonify({"error":"No URL"}), 400
 
         import yt_dlp
-        out = os.path.join(tempfile.gettempdir(), "audio_raw")
+        out     = os.path.join(tempfile.gettempdir(), "audio_raw")
         cookies = "/app/cookies.txt"
+
         opts = {
-            "format":"bestaudio/best/worstaudio/worst","outtmpl":out,"noplaylist":True,
-            "postprocessors":[{"key":"FFmpegExtractAudio","preferredcodec":"wav","preferredquality":"192"}],
+            "format"    :"bestaudio/best/worstaudio/worst",
+            "outtmpl"   : out,
+            "noplaylist": True,
+            "postprocessors":[{
+                "key"            :"FFmpegExtractAudio",
+                "preferredcodec" :"wav",
+                "preferredquality":"192"
+            }],
             **( {"cookiefile":cookies} if os.path.exists(cookies) else {} ),
             "extractor_args":{"youtube":{"player_client":["android","web"]}},
-            "quiet":True, "sleep_interval":2, "max_sleep_interval":4,
+            "quiet": True,
+            "sleep_interval":2,"max_sleep_interval":4,
         }
+
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title    = info.get("title","Unknown")
-            duration = info.get("duration",0)
+            info     = ydl.extract_info(url, download=True)
+            title    = info.get("title",   "Unknown")
+            duration = info.get("duration", 0)
             channel  = info.get("uploader","Unknown")
 
         wav = out+".wav"
         if not os.path.exists(wav):
             for ext in [".webm",".m4a",".opus",".mp3"]:
                 if os.path.exists(out+ext):
-                    os.system(f"ffmpeg -i '{out+ext}' '{wav}' -y -q:a 0"); break
+                    os.system(f"ffmpeg -i '{out+ext}' '{wav}' -y -q:a 0")
+                    break
+
+        if not os.path.exists(wav):
+            return jsonify({"error":"Audio download failed"}), 500
 
         transcript, lang = do_transcribe(wav)
+
         if os.path.exists(wav): os.remove(wav)
+
         vtype = detect_video_type(transcript, title)
 
-        return jsonify({"success":True,"transcript":transcript,"video_title":title,
-            "channel":channel,"duration":f"{duration//60}m {duration%60}s",
-            "detected_language":lang,"word_count":len(transcript.split()),"video_type":vtype})
+        return jsonify({
+            "success":True, "transcript":transcript,
+            "video_title":title, "channel":channel,
+            "duration":f"{duration//60}m {duration%60}s",
+            "detected_language":lang,
+            "word_count":len(transcript.split()),
+            "video_type":vtype
+        })
+
     except Exception as e:
         return jsonify({"error":str(e)}), 500
 
 @app.route("/api/process-file", methods=["POST"])
 def process_file():
     try:
-        if "video" not in request.files: return jsonify({"error":"No file"}), 400
-        f = request.files["video"]
+        if "video" not in request.files:
+            return jsonify({"error":"No file uploaded"}), 400
+
+        f     = request.files["video"]
         tmp_v = os.path.join(tempfile.gettempdir(),"upload.mp4")
         tmp_a = os.path.join(tempfile.gettempdir(),"upload.wav")
         f.save(tmp_v)
-        os.system(f"ffmpeg -i '{tmp_v}' '{tmp_a}' -y -q:a 0")
+
+        # Convert to compressed wav — keep under 25MB
+        os.system(f"ffmpeg -i '{tmp_v}' -ar 16000 -ac 1 -b:a 32k '{tmp_a}' -y 2>/dev/null")
+
+        if not os.path.exists(tmp_a):
+            return jsonify({"error":"Audio extraction failed"}), 500
+
         transcript, lang = do_transcribe(tmp_a)
-        for p in [tmp_v,tmp_a]:
+
+        for p in [tmp_v, tmp_a]:
             if os.path.exists(p): os.remove(p)
+
         vtype = detect_video_type(transcript, f.filename)
-        return jsonify({"success":True,"transcript":transcript,"video_title":f.filename,
-            "detected_language":lang,"word_count":len(transcript.split()),"video_type":vtype})
+
+        return jsonify({
+            "success":True, "transcript":transcript,
+            "video_title":f.filename, "detected_language":lang,
+            "word_count":len(transcript.split()), "video_type":vtype
+        })
+
     except Exception as e:
         return jsonify({"error":str(e)}), 500
 
 @app.route("/api/summarize", methods=["POST"])
 def summarize():
     try:
-        data = request.json
+        data       = request.json
         transcript = data.get("transcript","")
         title      = data.get("video_title","")
         vtype      = data.get("video_type","educational")
 
         if vtype == "song":
             return jsonify({"success":True,"summary":None,
-                "message":"🎵 Song detected — summarization not available.","video_type":"song"})
+                "message":"🎵 Song detected — summarization not available.",
+                "video_type":"song"})
 
         client = Groq(api_key=GROQ_API_KEY)
         text   = clean_transcript(transcript)
@@ -155,53 +234,76 @@ def summarize():
         cfg    = get_summary_config(wc)
 
         if vtype == "movie":
-            prompt = f'Tell me the complete story of the movie in title: "{title}". 300+ words.'
+            prompt = f'Tell the complete story of the movie: "{title}". 300+ words.'
         else:
-            prompt = (f'Summarize this video "{title}" ({wc} words) with {cfg["detail"]} detail.\n'
-                      f'- 1 opening sentence\n- {cfg["bullets"]} bullet points (2-3 sentences each)\n'
-                      f'- 1 closing sentence\nTotal: {cfg["words"]} words. Cover ALL topics.\n\n'
-                      f'Transcript:\n{text}\n\nSummary:')
+            prompt = (
+                f'Summarize this video "{title}" ({wc} words) — {cfg["detail"]} summary.\n'
+                f'- 1 opening sentence\n'
+                f'- {cfg["bullets"]} bullet points (2-3 sentences each, include specific details)\n'
+                f'- 1 closing sentence\n'
+                f'Total: {cfg["words"]} words. Cover ALL topics.\n\n'
+                f'Transcript:\n{text}\n\nSummary:'
+            )
 
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role":"user","content":prompt}],
             max_tokens=1500, temperature=0.3)
-        return jsonify({"success":True,"summary":r.choices[0].message.content.strip(),
-            "video_type":vtype,"word_count":wc})
+
+        return jsonify({
+            "success":True,
+            "summary":r.choices[0].message.content.strip(),
+            "video_type":vtype, "word_count":wc
+        })
+
     except Exception as e:
         return jsonify({"error":str(e)}), 500
 
 @app.route("/api/ask", methods=["POST"])
 def ask():
     try:
-        data = request.json
+        data   = request.json
         client = Groq(api_key=GROQ_API_KEY)
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role":"user","content":
-                f"You are a smart AI. Answer from video transcript if related, else use general knowledge. "
-                f"For code requests always write complete working code.\n\n"
-                f"Transcript:\n{data.get('transcript','')}\n\nQ: {data.get('question','')}\nA:"}],
+                f"Smart AI assistant. Answer from transcript if related, else general knowledge. "
+                f"For code requests write complete working code.\n\n"
+                f"Transcript:\n{data.get('transcript','')}\n\n"
+                f"Q: {data.get('question','')}\nA:"}],
             max_tokens=1500, temperature=0.5)
-        return jsonify({"success":True,"answer":r.choices[0].message.content.strip()})
+        return jsonify({"success":True,
+            "answer":r.choices[0].message.content.strip()})
     except Exception as e:
         return jsonify({"error":str(e)}), 500
 
 @app.route("/api/translate", methods=["POST"])
 def translate():
     try:
-        data = request.json
+        data   = request.json
         client = Groq(api_key=GROQ_API_KEY)
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role":"user","content":
-                f"Translate keeping bullet structure. Language: {data.get('language')}\n\n"
+                f"Translate to {data.get('language')}. Keep bullet structure.\n\n"
                 f"{data.get('summary','')}"}],
             max_tokens=800, temperature=0.2)
-        return jsonify({"success":True,"translated":r.choices[0].message.content.strip(),
+        return jsonify({"success":True,
+            "translated":r.choices[0].message.content.strip(),
             "language":data.get("language")})
     except Exception as e:
         return jsonify({"error":str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=False, host="0.0.0.0", port=5000)
+```
+
+---
+
+**Update `requirements.txt`** — remove heavy packages:
+```
+flask
+flask-cors
+groq
+yt-dlp
+gunicorn
