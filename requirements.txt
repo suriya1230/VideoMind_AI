@@ -4,4 +4,6 @@ faster-whisper
 groq
 yt-dlp
 torch
+pytubefix
 gunicorn
+requests
