@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os, re, tempfile
 from collections import Counter
 from groq import Groq
+import shutil
 
 app = Flask(__name__)
 CORS(app)
@@ -137,6 +138,26 @@ def home():
 def health():
     return jsonify({"status":"ok","mode":"groq-whisper-api"})
 
+
+def get_cookies_path():
+    """
+    Copy cookies from read-only secret location to writable temp folder.
+    """
+    secret_path = "/etc/secrets/cookies.txt"
+    temp_path   = os.path.join(tempfile.gettempdir(), "cookies.txt")
+
+    if os.path.exists(secret_path):
+        # ✅ Copy to writable temp location
+        shutil.copy2(secret_path, temp_path)
+        print("✅ Cookies copied to temp")
+        return temp_path
+
+    elif os.path.exists(temp_path):
+        return temp_path
+
+    print("⚠ No cookies found")
+    return None
+
 @app.route("/api/process-url", methods=["POST"])
 def process_url():
     try:
@@ -144,8 +165,8 @@ def process_url():
         if not url: return jsonify({"error":"No URL"}), 400
 
         import yt_dlp
-        out     = os.path.join(tempfile.gettempdir(), "audio_raw")
-        cookies = "/etc/secrets/cookies.txt"
+        out          = os.path.join(tempfile.gettempdir(), "audio_raw")
+        cookies_path = get_cookies_path()   # ✅ use temp writable path
 
         opts = {
             "format"    : "bestaudio/best/worstaudio/worst",
@@ -157,10 +178,9 @@ def process_url():
                 "preferredquality": "192"
             }],
 
-            # ✅ Fix 1: Use cookies if available
-            **( {"cookiefile": cookies} if os.path.exists(cookies) else {} ),
+            # ✅ Only add cookiefile if it exists
+            **( {"cookiefile": cookies_path} if cookies_path else {} ),
 
-            # ✅ Fix 2: Try multiple clients — web_creator bypasses bot check
             "extractor_args": {
                 "youtube": {
                     "player_client": [
@@ -173,22 +193,15 @@ def process_url():
                     ]
                 }
             },
-
-            # ✅ Fix 3: Fake a real browser
             "http_headers": {
                 "User-Agent"     : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Accept"         : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
-
-            # ✅ Fix 4: Add delay to avoid rate limiting
-            "sleep_interval"    : 3,
-            "max_sleep_interval": 8,
+            "sleep_interval"         : 3,
+            "max_sleep_interval"     : 8,
             "sleep_interval_requests": 2,
-
-            "quiet"          : True,
-            "no_warnings"    : False,
-            "ignoreerrors"   : False,
+            "quiet"      : True,
+            "no_warnings": False,
         }
 
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -207,7 +220,7 @@ def process_url():
                     break
 
         if not os.path.exists(wav):
-            return jsonify({"error": "Audio download failed — try again in a few minutes"}), 500
+            return jsonify({"error":"Audio download failed — try again in a few minutes"}), 500
 
         transcript, lang = do_transcribe(wav)
         if os.path.exists(wav): os.remove(wav)
@@ -227,19 +240,12 @@ def process_url():
 
     except Exception as e:
         error_msg = str(e)
-
-        # ✅ Fix 5: User-friendly error messages
         if "Sign in" in error_msg or "bot" in error_msg:
-            return jsonify({"error":
-                "YouTube blocked this request. Please try again in 2-3 minutes, "
-                "or try a different video URL."}), 500
+            return jsonify({"error":"YouTube blocked this. Please try again in 2-3 minutes."}), 500
         elif "429" in error_msg:
-            return jsonify({"error":
-                "Too many requests to YouTube. Please wait 5 minutes and try again."}), 500
-        elif "Private video" in error_msg:
-            return jsonify({"error": "This video is private and cannot be accessed."}), 500
-        elif "not available" in error_msg:
-            return jsonify({"error": "This video is not available in the server region."}), 500
+            return jsonify({"error":"Too many requests. Wait 5 minutes and try again."}), 500
+        elif "Errno 30" in error_msg or "Read-only" in error_msg:
+            return jsonify({"error":"Server file system error. Cookies path issue — contact admin."}), 500
         else:
             return jsonify({"error": error_msg}), 500
 
