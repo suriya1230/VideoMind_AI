@@ -148,18 +148,47 @@ def process_url():
         cookies = "/etc/secrets/cookies.txt"
 
         opts = {
-            "format"    :"bestaudio/best/worstaudio/worst",
+            "format"    : "bestaudio/best/worstaudio/worst",
             "outtmpl"   : out,
             "noplaylist": True,
             "postprocessors":[{
-                "key"            :"FFmpegExtractAudio",
-                "preferredcodec" :"wav",
-                "preferredquality":"192"
+                "key"            : "FFmpegExtractAudio",
+                "preferredcodec" : "wav",
+                "preferredquality": "192"
             }],
-            **( {"cookiefile":cookies} if os.path.exists(cookies) else {} ),
-            "extractor_args":{"youtube":{"player_client":["android","web"]}},
-            "quiet": True,
-            "sleep_interval":2,"max_sleep_interval":4,
+
+            # ✅ Fix 1: Use cookies if available
+            **( {"cookiefile": cookies} if os.path.exists(cookies) else {} ),
+
+            # ✅ Fix 2: Try multiple clients — web_creator bypasses bot check
+            "extractor_args": {
+                "youtube": {
+                    "player_client": [
+                        "web_creator",
+                        "android_vr",
+                        "android_embedded",
+                        "web_embedded",
+                        "android",
+                        "web"
+                    ]
+                }
+            },
+
+            # ✅ Fix 3: Fake a real browser
+            "http_headers": {
+                "User-Agent"     : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept"         : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+
+            # ✅ Fix 4: Add delay to avoid rate limiting
+            "sleep_interval"    : 3,
+            "max_sleep_interval": 8,
+            "sleep_interval_requests": 2,
+
+            "quiet"          : True,
+            "no_warnings"    : False,
+            "ignoreerrors"   : False,
         }
 
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -168,33 +197,51 @@ def process_url():
             duration = info.get("duration", 0)
             channel  = info.get("uploader","Unknown")
 
-        wav = out+".wav"
+        wav = out + ".wav"
         if not os.path.exists(wav):
             for ext in [".webm",".m4a",".opus",".mp3"]:
-                if os.path.exists(out+ext):
-                    os.system(f"ffmpeg -i '{out+ext}' '{wav}' -y -q:a 0")
+                candidate = out + ext
+                if os.path.exists(candidate):
+                    os.system(f"ffmpeg -i '{candidate}' '{wav}' -y -q:a 0")
+                    os.remove(candidate)
                     break
 
         if not os.path.exists(wav):
-            return jsonify({"error":"Audio download failed"}), 500
+            return jsonify({"error": "Audio download failed — try again in a few minutes"}), 500
 
         transcript, lang = do_transcribe(wav)
-
         if os.path.exists(wav): os.remove(wav)
 
         vtype = detect_video_type(transcript, title)
 
         return jsonify({
-            "success":True, "transcript":transcript,
-            "video_title":title, "channel":channel,
-            "duration":f"{duration//60}m {duration%60}s",
-            "detected_language":lang,
-            "word_count":len(transcript.split()),
-            "video_type":vtype
+            "success"          : True,
+            "transcript"       : transcript,
+            "video_title"      : title,
+            "channel"          : channel,
+            "duration"         : f"{duration//60}m {duration%60}s",
+            "detected_language": lang,
+            "word_count"       : len(transcript.split()),
+            "video_type"       : vtype
         })
 
     except Exception as e:
-        return jsonify({"error":str(e)}), 500
+        error_msg = str(e)
+
+        # ✅ Fix 5: User-friendly error messages
+        if "Sign in" in error_msg or "bot" in error_msg:
+            return jsonify({"error":
+                "YouTube blocked this request. Please try again in 2-3 minutes, "
+                "or try a different video URL."}), 500
+        elif "429" in error_msg:
+            return jsonify({"error":
+                "Too many requests to YouTube. Please wait 5 minutes and try again."}), 500
+        elif "Private video" in error_msg:
+            return jsonify({"error": "This video is private and cannot be accessed."}), 500
+        elif "not available" in error_msg:
+            return jsonify({"error": "This video is not available in the server region."}), 500
+        else:
+            return jsonify({"error": error_msg}), 500
 
 @app.route("/api/process-file", methods=["POST"])
 def process_file():
