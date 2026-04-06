@@ -3,9 +3,11 @@ services:
     name: videoai-backend
     env: python
     region: oregon
-    buildCommand: pip install -r requirements.txt && pip install -U yt-dlp pytubefix
+    buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300
     envVars:
       - key: GROQ_API_KEY
+        sync: false
+      - key: SUPADATA_KEY
         sync: false
  
