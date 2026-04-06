@@ -18,10 +18,10 @@ CORS(app, resources={
 # ✅ Fix file upload limit — 100MB
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
-GROQ_API_KEY  = os.environ.get("GROQ_API_KEY",  "your_groq_key_here")
-SUPADATA_KEY  = os.environ.get("SUPADATA_KEY",  "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "your_groq_key_here")
+SUPADATA_KEY = os.environ.get("SUPADATA_KEY", "")
 
-print("✅ Backend ready — VideoMind AI v5.0")
+print("✅ Backend ready — VideoMind AI v6.0")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -107,19 +107,40 @@ def extract_video_id(url):
 
 
 # ═══════════════════════════════════════════════════════════════
+# ✅ NEW: Get real video title from YouTube oEmbed (free, no key)
+# ═══════════════════════════════════════════════════════════════
+def get_video_metadata(video_id):
+    """Get real video title and channel from YouTube oEmbed API — free."""
+    try:
+        r = requests.get(
+            "https://www.youtube.com/oembed",
+            params  = {
+                "url"   : f"https://www.youtube.com/watch?v={video_id}",
+                "format": "json"
+            },
+            timeout = 5
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return (
+                data.get("title",       f"YouTube Video ({video_id})"),
+                data.get("author_name", "YouTube"),
+            )
+    except Exception as e:
+        print(f"   Metadata fetch failed: {e}")
+
+    return f"YouTube Video ({video_id})", "YouTube"
+
+
+# ═══════════════════════════════════════════════════════════════
 # YOUTUBE TRANSCRIPT — Method 1: youtube-transcript-api
 # ═══════════════════════════════════════════════════════════════
 def get_transcript_youtube_api(video_id):
-    """
-    Gets YouTube captions directly — no audio download needed.
-    Works on most videos that have captions/subtitles enabled.
-    Completely free, no API key needed.
-    """
+    """Gets YouTube captions directly — free, no API key needed."""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         print("   [T1] Trying youtube-transcript-api...")
 
-        # Try many languages
         languages = [
             'en', 'en-US', 'en-GB', 'en-IN',
             'ta', 'hi', 'te', 'ml', 'kn', 'bn',
@@ -136,9 +157,8 @@ def get_transcript_youtube_api(video_id):
             t.get("text", "") for t in transcript_list
         ]).strip()
 
-        # Clean HTML tags if any
         transcript = re.sub(r'<[^>]+>', ' ', transcript)
-        transcript = re.sub(r'\s+', ' ', transcript).strip()
+        transcript = re.sub(r'\s+',    ' ', transcript).strip()
 
         if len(transcript) > 50:
             print(f"   ✅ youtube-transcript-api success ({len(transcript.split())} words)")
@@ -154,11 +174,7 @@ def get_transcript_youtube_api(video_id):
 # YOUTUBE TRANSCRIPT — Method 2: Supadata API
 # ═══════════════════════════════════════════════════════════════
 def get_transcript_supadata(video_id):
-    """
-    Supadata free API — gets YouTube transcript.
-    Free tier: 1000 requests/month
-    Get key at: https://supadata.ai
-    """
+    """Supadata free API — 1000 requests/month. Get key at supadata.ai"""
     try:
         if not SUPADATA_KEY:
             print("   [T2] No SUPADATA_KEY — skipping")
@@ -186,7 +202,6 @@ def get_transcript_supadata(video_id):
         if not transcript or len(transcript) < 50:
             return None, None, 0, None
 
-        # Get video metadata
         title    = f"YouTube Video ({video_id})"
         duration = 0
         channel  = "YouTube"
@@ -206,7 +221,7 @@ def get_transcript_supadata(video_id):
         except:
             pass
 
-        print(f"   ✅ Supadata success: {title}")
+        print(f"   ✅ Supadata success")
         return transcript, title, duration, channel
 
     except Exception as e:
@@ -219,10 +234,7 @@ def get_transcript_supadata(video_id):
 # YOUTUBE TRANSCRIPT — Method 3: Invidious Captions
 # ═══════════════════════════════════════════════════════════════
 def get_transcript_invidious(video_id):
-    """
-    Get captions from Invidious public servers.
-    No audio download — just text captions.
-    """
+    """Get captions from Invidious public servers — no audio download."""
     instances = [
         "https://invidious.io.lol",
         "https://yewtu.be",
@@ -236,7 +248,6 @@ def get_transcript_invidious(video_id):
         try:
             print(f"   [T3] Trying Invidious captions: {instance}")
 
-            # Get video info + caption list
             r = requests.get(
                 f"{instance}/api/v1/videos/{video_id}",
                 timeout = 8,
@@ -246,19 +257,15 @@ def get_transcript_invidious(video_id):
                 continue
 
             data  = r.json()
-            title = data.get("title",  f"YouTube Video ({video_id})")
-            dur   = data.get("lengthSeconds", 0)
-            ch    = data.get("author", "YouTube")
-            caps  = data.get("captions", [])
+            title = data.get("title",         f"YouTube Video ({video_id})")
+            dur   = data.get("lengthSeconds",  0)
+            ch    = data.get("author",         "YouTube")
+            caps  = data.get("captions",       [])
 
             if not caps:
                 continue
 
-            # Prefer English captions
-            en_caps = [
-                c for c in caps
-                if "en" in c.get("languageCode","").lower()
-            ]
+            en_caps    = [c for c in caps if "en" in c.get("languageCode","").lower()]
             target_cap = en_caps[0] if en_caps else caps[0]
             cap_url    = target_cap.get("url", "")
 
@@ -273,14 +280,13 @@ def get_transcript_invidious(video_id):
             if cap_r.status_code != 200:
                 continue
 
-            # Parse caption text — remove XML/HTML tags and timestamps
             text = cap_r.text
             text = re.sub(r'<[^>]+>', ' ', text)
-            text = re.sub(r'&amp;', '&', text)
-            text = re.sub(r'&lt;',  '<', text)
-            text = re.sub(r'&gt;',  '>', text)
-            text = re.sub(r'&quot;','"', text)
-            text = re.sub(r'\s+',   ' ', text).strip()
+            text = re.sub(r'&amp;',  '&', text)
+            text = re.sub(r'&lt;',   '<', text)
+            text = re.sub(r'&gt;',   '>', text)
+            text = re.sub(r'&quot;', '"', text)
+            text = re.sub(r'\s+',    ' ', text).strip()
 
             if len(text) > 100:
                 print(f"   ✅ Invidious captions success: {instance}")
@@ -294,13 +300,10 @@ def get_transcript_invidious(video_id):
 
 
 # ═══════════════════════════════════════════════════════════════
-# YOUTUBE TRANSCRIPT — Method 4: Groq Whisper via Invidious audio
+# YOUTUBE TRANSCRIPT — Method 4: Invidious Audio + Groq Whisper
 # ═══════════════════════════════════════════════════════════════
 def get_transcript_invidious_audio(video_id):
-    """
-    Download audio from Invidious and transcribe with Groq Whisper.
-    Last resort — only if captions are unavailable.
-    """
+    """Download audio from Invidious + transcribe with Groq Whisper."""
     instances = [
         "https://invidious.io.lol",
         "https://yewtu.be",
@@ -321,21 +324,15 @@ def get_transcript_invidious_audio(video_id):
                 continue
 
             data  = r.json()
-            title = data.get("title",         f"YouTube Video ({video_id})")
-            dur   = data.get("lengthSeconds",  0)
-            ch    = data.get("author",         "YouTube")
+            title = data.get("title",          f"YouTube Video ({video_id})")
+            dur   = data.get("lengthSeconds",   0)
+            ch    = data.get("author",          "YouTube")
             fmts  = data.get("adaptiveFormats", [])
 
-            audio_fmts = [
-                f for f in fmts
-                if "audio" in f.get("type", "")
-            ]
+            audio_fmts = [f for f in fmts if "audio" in f.get("type", "")]
             if not audio_fmts:
-                fmts = data.get("formatStreams", [])
-                audio_fmts = [
-                    f for f in fmts
-                    if "audio" in f.get("type", "")
-                ]
+                fmts       = data.get("formatStreams", [])
+                audio_fmts = [f for f in fmts if "audio" in f.get("type", "")]
             if not audio_fmts:
                 continue
 
@@ -395,40 +392,49 @@ def get_transcript_invidious_audio(video_id):
 # MASTER YOUTUBE PROCESSOR
 # ═══════════════════════════════════════════════════════════════
 def get_youtube_transcript(url, video_id):
-    """
-    Tries 4 methods in order — all free, no bot detection issues.
-    Returns: (transcript, title, duration, channel, lang)
-    """
-    title    = f"YouTube Video ({video_id})"
+    """Tries 4 methods — all free, no bot detection."""
+
+    # ✅ Get real title first from oEmbed
+    title, channel = get_video_metadata(video_id)
+    print(f"   Video: {title}")
+
     duration = 0
-    channel  = "YouTube"
     lang     = "en"
 
-    # ── Method 1: youtube-transcript-api (fastest, no API key) ──
+    # Method 1: youtube-transcript-api
     print("\n[1/4] youtube-transcript-api")
     transcript = get_transcript_youtube_api(video_id)
     if transcript:
         return transcript, title, duration, channel, lang
 
-    # ── Method 2: Supadata API (needs free API key) ──────────────
+    # Method 2: Supadata API
     print("\n[2/4] Supadata API")
     result = get_transcript_supadata(video_id)
     if result[0]:
-        transcript, title, duration, channel = result
+        transcript, t, dur, ch = result
+        if t:  title   = t
+        if ch: channel = ch
+        if dur: duration = dur
         return transcript, title, duration, channel, lang
 
-    # ── Method 3: Invidious Captions (no API key) ────────────────
+    # Method 3: Invidious Captions
     print("\n[3/4] Invidious captions")
     result = get_transcript_invidious(video_id)
     if result[0]:
-        transcript, title, duration, channel = result
+        transcript, t, dur, ch = result
+        if t:  title   = t
+        if ch: channel = ch
+        if dur: duration = dur
         return transcript, title, duration, channel, lang
 
-    # ── Method 4: Invidious Audio + Groq Whisper ─────────────────
+    # Method 4: Invidious Audio + Groq Whisper
     print("\n[4/4] Invidious audio + Groq Whisper")
     result = get_transcript_invidious_audio(video_id)
     if result[0]:
-        transcript, title, duration, channel = result
+        transcript, t, dur, ch = result
+        if t:  title   = t
+        if ch: channel = ch
+        if dur: duration = dur
         return transcript, title, duration, channel, lang
 
     return None, title, duration, channel, lang
@@ -505,7 +511,7 @@ def detect_language(text):
 def home():
     return jsonify({
         "status" : "✅ VideoMind AI Backend is running",
-        "version": "5.0",
+        "version": "6.0",
         "routes" : [
             "GET  /api/health",
             "POST /api/process-url",
@@ -521,7 +527,7 @@ def home():
 def health():
     return jsonify({
         "status"      : "ok",
-        "version"     : "5.0",
+        "version"     : "6.0",
         "supadata_key": "set" if SUPADATA_KEY else "not set",
     })
 
@@ -563,12 +569,11 @@ def process_url():
                 "error": (
                     "Could not get transcript for this video. "
                     "This usually means the video has no captions/subtitles. "
-                    "Please try a video that has captions enabled, "
-                    "or upload the video file directly using 'Upload File'."
+                    "Please try a video that has captions, "
+                    "or use 'Upload File' instead."
                 )
             }), 500
 
-        # Detect language if not already detected
         if lang == "en":
             lang = detect_language(transcript)
 
@@ -678,6 +683,9 @@ def summarize():
         wc     = len(transcript.split())
         cfg    = get_summary_config(wc)
 
+        # ✅ Fix: Limit transcript to 4000 words to fit Groq context
+        text_limited = " ".join(text.split()[:4000])
+
         if vtype == "movie":
             prompt = (
                 f'Tell the complete story of the movie: "{title}".\n'
@@ -695,19 +703,25 @@ def summarize():
                 f'- 1 strong closing sentence\n'
                 f'Total: {cfg["words"]} words. '
                 f'Cover ALL topics without missing anything.\n\n'
-                f'Transcript:\n{text}\n\nSummary:'
+                f'Transcript:\n{text_limited}\n\nSummary:'
             )
 
         r = client.chat.completions.create(
             model       = "llama-3.3-70b-versatile",
             messages    = [{"role": "user", "content": prompt}],
-            max_tokens  = 1500,
+            # ✅ Fix: Increased max_tokens for long Tamil/Indian language videos
+            max_tokens  = 2500,
             temperature = 0.3,
         )
 
+        summary = r.choices[0].message.content.strip()
+
+        if not summary:
+            return jsonify({"error": "Summary generation returned empty response"}), 500
+
         return jsonify({
             "success"   : True,
-            "summary"   : r.choices[0].message.content.strip(),
+            "summary"   : summary,
             "video_type": vtype,
             "word_count": wc,
         })
@@ -731,6 +745,9 @@ def ask():
         if not question:
             return jsonify({"error": "No question provided"}), 400
 
+        # ✅ Fix: Limit transcript for Q&A too
+        transcript_limited = " ".join(transcript.split()[:6000])
+
         client = Groq(api_key=GROQ_API_KEY)
         r = client.chat.completions.create(
             model    = "llama-3.3-70b-versatile",
@@ -739,7 +756,7 @@ def ask():
                 f"1. If the question relates to the video transcript, answer from it.\n"
                 f"2. If the question is general or asks for code, use your knowledge.\n"
                 f"3. For code requests always write complete working code with comments.\n\n"
-                f"Video Transcript:\n{transcript}\n\n"
+                f"Video Transcript:\n{transcript_limited}\n\n"
                 f"Question: {question}\n\nAnswer:"}],
             max_tokens  = 1500,
             temperature = 0.5,
@@ -780,7 +797,7 @@ def translate():
                 f"Only translate — do not add any extra text.\n\n"
                 f"Summary:\n{summary}\n\n"
                 f"{language} Translation:"}],
-            max_tokens  = 800,
+            max_tokens  = 1000,
             temperature = 0.2,
         )
 
