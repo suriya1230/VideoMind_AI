@@ -5,10 +5,22 @@ from collections import Counter
 from groq import Groq
 
 app = Flask(__name__)
-CORS(app)
+
+# ✅ Fix CORS — allow all origins
+CORS(app, resources={
+    r"/api/*": {
+        "origins"     : "*",
+        "methods"     : ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
+
+# ✅ Fix file upload limit — 100MB
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "your_key_here")
 print("✅ Backend ready — using Groq Whisper API")
+
 
 # ═══════════════════════════════════════════════════════════════
 # TRANSCRIPTION — Groq Whisper API (zero RAM)
@@ -31,8 +43,10 @@ def do_transcribe(audio_path):
         print("   Large file — splitting into chunks...")
         import subprocess
         probe = subprocess.run([
-            "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", audio_path
+            "ffprobe", "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            audio_path
         ], capture_output=True, text=True)
 
         try:
@@ -47,7 +61,9 @@ def do_transcribe(audio_path):
         start       = 0
 
         while start < total_dur:
-            chunk_file = os.path.join(tempfile.gettempdir(), f"chunk_{chunk_index}.wav")
+            chunk_file = os.path.join(
+                tempfile.gettempdir(), f"chunk_{chunk_index}.wav"
+            )
             os.system(
                 f"ffmpeg -i '{audio_path}' -ss {start} -t {chunk_dur} "
                 f"-ar 16000 -ac 1 '{chunk_file}' -y 2>/dev/null"
@@ -71,7 +87,7 @@ def do_transcribe(audio_path):
 
 
 # ═══════════════════════════════════════════════════════════════
-# YOUTUBE DOWNLOAD — pytubefix + Invidious fallback
+# YOUTUBE — Extract Video ID
 # ═══════════════════════════════════════════════════════════════
 def extract_video_id(url):
     patterns = [
@@ -79,6 +95,7 @@ def extract_video_id(url):
         r'youtu\.be/([a-zA-Z0-9_-]{11})',
         r'shorts/([a-zA-Z0-9_-]{11})',
         r'live/([a-zA-Z0-9_-]{11})',
+        r'embed/([a-zA-Z0-9_-]{11})',
     ]
     for p in patterns:
         m = re.search(p, url)
@@ -87,24 +104,35 @@ def extract_video_id(url):
     return None
 
 
+# ═══════════════════════════════════════════════════════════════
+# METHOD 1 — pytubefix
+# ═══════════════════════════════════════════════════════════════
 def download_via_pytubefix(url):
-    """Try pytubefix — fast and free."""
     try:
         from pytubefix import YouTube
-        print("   Trying pytubefix...")
+        print("   [Method 1] Trying pytubefix...")
 
         yt      = YouTube(url)
         title   = yt.title
         dur     = yt.length
         channel = yt.author
 
-        stream = yt.streams.filter(only_audio=True).order_by("abr").last()
+        stream = (
+            yt.streams
+              .filter(only_audio=True)
+              .order_by("abr")
+              .last()
+        )
         if not stream:
+            print("   No audio stream found")
             return None, None, 0, None
 
         tmp_dir    = tempfile.gettempdir()
-        audio_file = stream.download(output_path=tmp_dir, filename="audio_raw_pt")
-        wav        = os.path.join(tmp_dir, "audio_pt.wav")
+        audio_file = stream.download(
+            output_path = tmp_dir,
+            filename    = "audio_pytubefix"
+        )
+        wav = os.path.join(tmp_dir, "audio_pytubefix.wav")
 
         os.system(
             f"ffmpeg -i '{audio_file}' -ar 16000 -ac 1 -b:a 32k "
@@ -113,7 +141,7 @@ def download_via_pytubefix(url):
         if os.path.exists(audio_file):
             os.remove(audio_file)
 
-        if os.path.exists(wav):
+        if os.path.exists(wav) and os.path.getsize(wav) > 1000:
             print("   ✅ pytubefix success")
             return wav, title, dur, channel
 
@@ -123,15 +151,23 @@ def download_via_pytubefix(url):
     return None, None, 0, None
 
 
+# ═══════════════════════════════════════════════════════════════
+# METHOD 2 — Invidious API
+# ═══════════════════════════════════════════════════════════════
 def download_via_invidious(video_id):
-    """Fallback — Invidious public API, no bot detection."""
     instances = [
-        "https://invidious.snopyta.org",
+        "https://invidious.io.lol",
+        "https://invidious.privacydev.net",
+        "https://iv.ggtyler.dev",
+        "https://invidious.perennialte.ch",
+        "https://invidious.lunar.icu",
+        "https://invidious.reallyaweso.me",
+        "https://invidious.incogniweb.net",
+        "https://invidious.slipfox.xyz",
         "https://yewtu.be",
         "https://invidious.kavin.rocks",
         "https://inv.riverside.rocks",
         "https://invidious.nerdvpn.de",
-        "https://invidious.tiekoetter.com",
         "https://yt.artemislena.eu",
         "https://invidious.flokinet.to",
         "https://vid.puffyan.us",
@@ -140,43 +176,73 @@ def download_via_invidious(video_id):
 
     for instance in instances:
         try:
-            print(f"   Trying Invidious: {instance}")
+            print(f"   [Method 2] Trying: {instance}")
             r = requests.get(
                 f"{instance}/api/v1/videos/{video_id}",
-                timeout = 10,
+                timeout = 8,
                 headers = {"User-Agent": "Mozilla/5.0"}
             )
             if r.status_code != 200:
                 continue
 
             data    = r.json()
-            title   = data.get("title",          "Unknown")
-            dur     = data.get("lengthSeconds",   0)
-            channel = data.get("author",          "Unknown")
-            fmts    = data.get("adaptiveFormats", [])
+            title   = data.get("title",         "Unknown")
+            dur     = data.get("lengthSeconds",  0)
+            channel = data.get("author",         "Unknown")
 
+            # Try adaptiveFormats
+            fmts = data.get("adaptiveFormats", [])
             audio_fmts = [
                 f for f in fmts
-                if f.get("type", "").startswith("audio/")
+                if "audio" in f.get("type", "")
             ]
+
+            # Fallback to formatStreams
+            if not audio_fmts:
+                fmts = data.get("formatStreams", [])
+                audio_fmts = [
+                    f for f in fmts
+                    if "audio" in f.get("type", "")
+                ]
+
             if not audio_fmts:
                 continue
 
-            audio_fmts.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
+            audio_fmts.sort(
+                key     = lambda x: x.get("bitrate", 0),
+                reverse = True
+            )
             audio_url = audio_fmts[0].get("url", "")
             if not audio_url:
                 continue
 
-            tmp_webm = os.path.join(tempfile.gettempdir(), "audio_inv.webm")
-            tmp_wav  = os.path.join(tempfile.gettempdir(), "audio_inv.wav")
+            tmp_webm = os.path.join(
+                tempfile.gettempdir(), f"audio_{video_id}.webm"
+            )
+            tmp_wav = os.path.join(
+                tempfile.gettempdir(), f"audio_{video_id}.wav"
+            )
+
+            for p in [tmp_webm, tmp_wav]:
+                if os.path.exists(p):
+                    os.remove(p)
 
             resp = requests.get(
-                audio_url, stream=True, timeout=60,
+                audio_url, stream=True, timeout=120,
                 headers={"User-Agent": "Mozilla/5.0"}
             )
+            if resp.status_code != 200:
+                continue
+
+            size = 0
             with open(tmp_webm, "wb") as f:
                 for chunk in resp.iter_content(8192):
                     f.write(chunk)
+                    size += len(chunk)
+
+            print(f"   Downloaded: {size/1024/1024:.1f} MB")
+            if size < 1000:
+                continue
 
             os.system(
                 f"ffmpeg -i '{tmp_webm}' -ar 16000 -ac 1 -b:a 32k "
@@ -185,24 +251,88 @@ def download_via_invidious(video_id):
             if os.path.exists(tmp_webm):
                 os.remove(tmp_webm)
 
-            if os.path.exists(tmp_wav):
+            if os.path.exists(tmp_wav) and os.path.getsize(tmp_wav) > 1000:
                 print(f"   ✅ Invidious success: {instance}")
                 return tmp_wav, title, int(dur), channel
 
+        except requests.Timeout:
+            print(f"   Timeout: {instance}")
+            continue
         except Exception as e:
-            print(f"   Invidious {instance} failed: {e}")
+            print(f"   Error {instance}: {e}")
             continue
 
     return None, None, 0, None
 
 
+# ═══════════════════════════════════════════════════════════════
+# METHOD 3 — yt-dlp iOS client (last resort)
+# ═══════════════════════════════════════════════════════════════
+def download_via_ytdlp(url):
+    try:
+        import yt_dlp
+        print("   [Method 3] Trying yt-dlp iOS client...")
+
+        out = os.path.join(tempfile.gettempdir(), "audio_ytdlp")
+
+        opts = {
+            "format"    : "bestaudio/best",
+            "outtmpl"   : out,
+            "noplaylist": True,
+            "postprocessors": [{
+                "key"            : "FFmpegExtractAudio",
+                "preferredcodec" : "wav",
+                "preferredquality": "96",
+            }],
+            # iOS client bypasses bot detection better
+            "extractor_args": {
+                "youtube": {
+                    "player_client": [
+                        "ios",
+                        "android_music",
+                        "android_creator",
+                        "web_creator",
+                    ]
+                }
+            },
+            "quiet"         : True,
+            "no_warnings"   : True,
+            "sleep_interval": 2,
+        }
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info    = ydl.extract_info(url, download=True)
+            title   = info.get("title",   "Unknown")
+            dur     = info.get("duration", 0)
+            channel = info.get("uploader","Unknown")
+
+        wav = out + ".wav"
+        if os.path.exists(wav) and os.path.getsize(wav) > 1000:
+            print("   ✅ yt-dlp success")
+            return wav, title, dur, channel
+
+    except Exception as e:
+        print(f"   yt-dlp failed: {e}")
+
+    return None, None, 0, None
+
+
+# ═══════════════════════════════════════════════════════════════
+# MASTER DOWNLOAD — tries all 3 methods
+# ═══════════════════════════════════════════════════════════════
 def download_audio(url, video_id):
-    """Try pytubefix first, then Invidious — both 100% free."""
+    # Method 1: pytubefix
     wav, title, dur, channel = download_via_pytubefix(url)
     if wav:
         return wav, title, dur, channel
 
+    # Method 2: Invidious
     wav, title, dur, channel = download_via_invidious(video_id)
+    if wav:
+        return wav, title, dur, channel
+
+    # Method 3: yt-dlp iOS
+    wav, title, dur, channel = download_via_ytdlp(url)
     if wav:
         return wav, title, dur, channel
 
@@ -232,17 +362,18 @@ def clean_transcript(text):
     }
     for w, c in counts.items():
         if c > threshold and w not in whitelist:
-            text = re.sub(rf'\b{re.escape(w)}\b', '', text, flags=re.IGNORECASE)
-
+            text = re.sub(
+                rf'\b{re.escape(w)}\b', '', text, flags=re.IGNORECASE
+            )
     return re.sub(r'\s+', ' ', text).strip()
 
 
 def get_summary_config(wc):
-    if   wc < 500:  return {"bullets": "3-4",  "words": "100-150", "detail": "brief"}
-    elif wc < 1500: return {"bullets": "4-5",  "words": "200-250", "detail": "moderate"}
-    elif wc < 3000: return {"bullets": "6-8",  "words": "300-400", "detail": "detailed"}
-    elif wc < 6000: return {"bullets": "8-10", "words": "450-550", "detail": "very detailed"}
-    else:           return {"bullets": "10-15","words": "600-800", "detail": "comprehensive"}
+    if   wc < 500:  return {"bullets":"3-4",  "words":"100-150","detail":"brief"}
+    elif wc < 1500: return {"bullets":"4-5",  "words":"200-250","detail":"moderate"}
+    elif wc < 3000: return {"bullets":"6-8",  "words":"300-400","detail":"detailed"}
+    elif wc < 6000: return {"bullets":"8-10", "words":"450-550","detail":"very detailed"}
+    else:           return {"bullets":"10-15","words":"600-800","detail":"comprehensive"}
 
 
 def detect_video_type(transcript, title):
@@ -250,7 +381,7 @@ def detect_video_type(transcript, title):
     r = client.chat.completions.create(
         model    = "llama-3.3-70b-versatile",
         messages = [{"role": "user", "content":
-            f"Classify this video into ONE word: song, movie, or educational.\n"
+            f"Classify this video into ONE word only: song, movie, or educational.\n"
             f"Title: {title}\n"
             f"Transcript: {' '.join(transcript.split()[:300])}\n"
             f"Category:"}],
@@ -270,14 +401,14 @@ def detect_video_type(transcript, title):
 def home():
     return jsonify({
         "status" : "✅ VideoMind AI Backend is running",
-        "version": "3.0",
+        "version": "4.0",
         "routes" : [
+            "GET  /api/health",
             "POST /api/process-url",
             "POST /api/process-file",
             "POST /api/summarize",
             "POST /api/ask",
             "POST /api/translate",
-            "GET  /api/health",
         ]
     })
 
@@ -287,37 +418,64 @@ def health():
     return jsonify({"status": "ok", "mode": "groq-whisper-api"})
 
 
-@app.route("/api/process-url", methods=["POST"])
+# ── Process YouTube URL ──────────────────────────────────────────────────────
+@app.route("/api/process-url", methods=["POST", "OPTIONS"])
 def process_url():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
     try:
-        url = request.json.get("url", "").strip()
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"error": "Invalid request body"}), 400
+
+        url = data.get("url", "").strip()
         if not url:
             return jsonify({"error": "No URL provided"}), 400
 
+        # Clean URL — remove extra spaces or characters
+        url = url.strip().strip('"').strip("'")
+
         video_id = extract_video_id(url)
         if not video_id:
-            return jsonify({"error": "Invalid YouTube URL"}), 400
+            return jsonify({
+                "error": "Invalid YouTube URL. Please use format: "
+                         "https://www.youtube.com/watch?v=XXXXXXXXXXX"
+            }), 400
 
+        print(f"\n{'='*50}")
         print(f"Processing video ID: {video_id}")
+        print(f"URL: {url}")
+        print(f"{'='*50}")
 
         wav, title, duration, channel = download_audio(url, video_id)
 
         if not wav:
-            return jsonify({"error":
-                "Could not download this video. "
-                "Please try a different video or try again in a few minutes."}), 500
+            return jsonify({
+                "error": (
+                    "All download methods failed for this video. "
+                    "Please try a different video or try again in 5 minutes."
+                )
+            }), 500
 
+        print(f"Transcribing: {title}")
         transcript, lang = do_transcribe(wav)
+
         if os.path.exists(wav):
             os.remove(wav)
 
+        if not transcript or len(transcript.strip()) < 10:
+            return jsonify({"error": "Transcription failed — audio may be empty"}), 500
+
         vtype = detect_video_type(transcript, title)
+
+        print(f"✅ Done: {title} | {lang} | {vtype}")
 
         return jsonify({
             "success"          : True,
             "transcript"       : transcript,
             "video_title"      : title,
-            "channel"          : channel,
+            "channel"          : channel or "Unknown",
             "duration"         : f"{duration // 60}m {duration % 60}s",
             "detected_language": lang,
             "word_count"       : len(transcript.split()),
@@ -329,37 +487,58 @@ def process_url():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/process-file", methods=["POST"])
+# ── Process Uploaded File ────────────────────────────────────────────────────
+@app.route("/api/process-file", methods=["POST", "OPTIONS"])
 def process_file():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
     try:
         if "video" not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
-        f     = request.files["video"]
-        tmp_v = os.path.join(tempfile.gettempdir(), "upload_video.mp4")
-        tmp_a = os.path.join(tempfile.gettempdir(), "upload_audio.wav")
-        f.save(tmp_v)
+        f         = request.files["video"]
+        filename  = f.filename or "video.mp4"
+        tmp_v     = os.path.join(tempfile.gettempdir(), "upload_video.mp4")
+        tmp_a     = os.path.join(tempfile.gettempdir(), "upload_audio.wav")
 
-        os.system(
+        # Clean old files
+        for p in [tmp_v, tmp_a]:
+            if os.path.exists(p):
+                os.remove(p)
+
+        f.save(tmp_v)
+        size_mb = os.path.getsize(tmp_v) / 1024 / 1024
+        print(f"Uploaded: {filename} ({size_mb:.1f} MB)")
+
+        # Extract audio
+        ret = os.system(
             f"ffmpeg -i '{tmp_v}' -ar 16000 -ac 1 -b:a 32k "
             f"'{tmp_a}' -y 2>/dev/null"
         )
+
+        if os.path.exists(tmp_v):
+            os.remove(tmp_v)
 
         if not os.path.exists(tmp_a):
             return jsonify({"error": "Audio extraction failed"}), 500
 
         transcript, lang = do_transcribe(tmp_a)
 
-        for p in [tmp_v, tmp_a]:
-            if os.path.exists(p):
-                os.remove(p)
+        if os.path.exists(tmp_a):
+            os.remove(tmp_a)
 
-        vtype = detect_video_type(transcript, f.filename)
+        if not transcript or len(transcript.strip()) < 10:
+            return jsonify({"error": "Transcription failed — video may have no audio"}), 500
+
+        vtype = detect_video_type(transcript, filename)
 
         return jsonify({
             "success"          : True,
             "transcript"       : transcript,
-            "video_title"      : f.filename,
+            "video_title"      : filename,
+            "channel"          : "Uploaded File",
+            "duration"         : "—",
             "detected_language": lang,
             "word_count"       : len(transcript.split()),
             "video_type"       : vtype,
@@ -370,13 +549,20 @@ def process_file():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/summarize", methods=["POST"])
+# ── Summarize ────────────────────────────────────────────────────────────────
+@app.route("/api/summarize", methods=["POST", "OPTIONS"])
 def summarize():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
     try:
-        data       = request.json
+        data       = request.get_json(silent=True) or {}
         transcript = data.get("transcript", "")
         title      = data.get("video_title", "")
         vtype      = data.get("video_type",  "educational")
+
+        if not transcript:
+            return jsonify({"error": "No transcript provided"}), 400
 
         if vtype == "song":
             return jsonify({
@@ -394,7 +580,7 @@ def summarize():
         if vtype == "movie":
             prompt = (
                 f'Tell the complete story of the movie: "{title}".\n'
-                f'Include main plot, key characters, important events and ending.\n'
+                f'Include: main plot, key characters, important events, ending.\n'
                 f'Write at least 300 words.'
             )
         else:
@@ -403,9 +589,11 @@ def summarize():
                 f'Write a {cfg["detail"]} summary:\n'
                 f'- 1 opening sentence about the overall topic\n'
                 f'- {cfg["bullets"]} detailed bullet points '
-                f'(2-3 sentences each with specific details and examples)\n'
+                f'(2-3 sentences each, include specific details, '
+                f'examples and numbers from the video)\n'
                 f'- 1 strong closing sentence\n'
-                f'Total: {cfg["words"]} words. Cover ALL topics.\n\n'
+                f'Total: {cfg["words"]} words. '
+                f'Cover ALL topics without missing anything.\n\n'
                 f'Transcript:\n{text}\n\nSummary:'
             )
 
@@ -428,10 +616,14 @@ def summarize():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/ask", methods=["POST"])
+# ── Q&A ──────────────────────────────────────────────────────────────────────
+@app.route("/api/ask", methods=["POST", "OPTIONS"])
 def ask():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
     try:
-        data       = request.json
+        data       = request.get_json(silent=True) or {}
         question   = data.get("question",   "")
         transcript = data.get("transcript", "")
 
@@ -443,8 +635,8 @@ def ask():
             model    = "llama-3.3-70b-versatile",
             messages = [{"role": "user", "content":
                 f"You are a smart AI assistant.\n"
-                f"1. If question relates to the video transcript, answer from it.\n"
-                f"2. If question is general or asks for code, use your own knowledge.\n"
+                f"1. If the question relates to the video transcript, answer from it.\n"
+                f"2. If the question is general or asks for code, use your knowledge.\n"
                 f"3. For code requests always write complete working code with comments.\n\n"
                 f"Video Transcript:\n{transcript}\n\n"
                 f"Question: {question}\n\nAnswer:"}],
@@ -462,10 +654,14 @@ def ask():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/translate", methods=["POST"])
+# ── Translate ────────────────────────────────────────────────────────────────
+@app.route("/api/translate", methods=["POST", "OPTIONS"])
 def translate():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
     try:
-        data     = request.json
+        data     = request.get_json(silent=True) or {}
         language = data.get("language", "")
         summary  = data.get("summary",  "")
 
@@ -480,7 +676,7 @@ def translate():
             messages = [{"role": "user", "content":
                 f"Translate this video summary to {language}.\n"
                 f"Keep the bullet point structure exactly as it is.\n"
-                f"Only translate the text, nothing else.\n\n"
+                f"Only translate — do not add any extra text.\n\n"
                 f"Summary:\n{summary}\n\n"
                 f"{language} Translation:"}],
             max_tokens  = 800,
