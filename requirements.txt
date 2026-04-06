@@ -7,3 +7,4 @@ torch
 pytubefix
 gunicorn
 requests
+youtube-transcript-api
