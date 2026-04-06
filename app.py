@@ -9,8 +9,8 @@ app = Flask(__name__)
 # ✅ Fix CORS — allow all origins
 CORS(app, resources={
     r"/api/*": {
-        "origins"     : "*",
-        "methods"     : ["GET", "POST", "OPTIONS"],
+        "origins"      : "*",
+        "methods"      : ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type"]
     }
 })
@@ -18,12 +18,14 @@ CORS(app, resources={
 # ✅ Fix file upload limit — 100MB
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "your_key_here")
-print("✅ Backend ready — using Groq Whisper API")
+GROQ_API_KEY  = os.environ.get("GROQ_API_KEY",  "your_groq_key_here")
+SUPADATA_KEY  = os.environ.get("SUPADATA_KEY",  "")
+
+print("✅ Backend ready — VideoMind AI v5.0")
 
 
 # ═══════════════════════════════════════════════════════════════
-# TRANSCRIPTION — Groq Whisper API (zero RAM)
+# TRANSCRIPTION — Groq Whisper API (for uploaded files)
 # ═══════════════════════════════════════════════════════════════
 def do_transcribe(audio_path):
     client    = Groq(api_key=GROQ_API_KEY)
@@ -105,78 +107,136 @@ def extract_video_id(url):
 
 
 # ═══════════════════════════════════════════════════════════════
-# METHOD 1 — pytubefix
+# YOUTUBE TRANSCRIPT — Method 1: youtube-transcript-api
 # ═══════════════════════════════════════════════════════════════
-def download_via_pytubefix(url):
+def get_transcript_youtube_api(video_id):
+    """
+    Gets YouTube captions directly — no audio download needed.
+    Works on most videos that have captions/subtitles enabled.
+    Completely free, no API key needed.
+    """
     try:
-        from pytubefix import YouTube
-        print("   [Method 1] Trying pytubefix...")
+        from youtube_transcript_api import YouTubeTranscriptApi
+        print("   [T1] Trying youtube-transcript-api...")
 
-        yt      = YouTube(url)
-        title   = yt.title
-        dur     = yt.length
-        channel = yt.author
+        # Try many languages
+        languages = [
+            'en', 'en-US', 'en-GB', 'en-IN',
+            'ta', 'hi', 'te', 'ml', 'kn', 'bn',
+            'fr', 'de', 'es', 'ar', 'ja', 'zh',
+            'pt', 'ru', 'ko', 'it', 'nl',
+        ]
 
-        stream = (
-            yt.streams
-              .filter(only_audio=True)
-              .order_by("abr")
-              .last()
+        transcript_list = YouTubeTranscriptApi.get_transcript(
+            video_id,
+            languages = languages
         )
-        if not stream:
-            print("   No audio stream found")
-            return None, None, 0, None
 
-        tmp_dir    = tempfile.gettempdir()
-        audio_file = stream.download(
-            output_path = tmp_dir,
-            filename    = "audio_pytubefix"
-        )
-        wav = os.path.join(tmp_dir, "audio_pytubefix.wav")
+        transcript = " ".join([
+            t.get("text", "") for t in transcript_list
+        ]).strip()
 
-        os.system(
-            f"ffmpeg -i '{audio_file}' -ar 16000 -ac 1 -b:a 32k "
-            f"'{wav}' -y 2>/dev/null"
-        )
-        if os.path.exists(audio_file):
-            os.remove(audio_file)
+        # Clean HTML tags if any
+        transcript = re.sub(r'<[^>]+>', ' ', transcript)
+        transcript = re.sub(r'\s+', ' ', transcript).strip()
 
-        if os.path.exists(wav) and os.path.getsize(wav) > 1000:
-            print("   ✅ pytubefix success")
-            return wav, title, dur, channel
+        if len(transcript) > 50:
+            print(f"   ✅ youtube-transcript-api success ({len(transcript.split())} words)")
+            return transcript
 
     except Exception as e:
-        print(f"   pytubefix failed: {e}")
+        print(f"   youtube-transcript-api failed: {e}")
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════
+# YOUTUBE TRANSCRIPT — Method 2: Supadata API
+# ═══════════════════════════════════════════════════════════════
+def get_transcript_supadata(video_id):
+    """
+    Supadata free API — gets YouTube transcript.
+    Free tier: 1000 requests/month
+    Get key at: https://supadata.ai
+    """
+    try:
+        if not SUPADATA_KEY:
+            print("   [T2] No SUPADATA_KEY — skipping")
+            return None, None, 0, None
+
+        print("   [T2] Trying Supadata API...")
+
+        r = requests.get(
+            "https://api.supadata.ai/v1/youtube/transcript",
+            params  = {"videoId": video_id, "lang": "en"},
+            headers = {"x-api-key": SUPADATA_KEY},
+            timeout = 30
+        )
+
+        if r.status_code != 200:
+            print(f"   Supadata error: {r.status_code}")
+            return None, None, 0, None
+
+        data       = r.json()
+        transcript = " ".join([
+            item.get("text", "")
+            for item in data.get("content", [])
+        ]).strip()
+
+        if not transcript or len(transcript) < 50:
+            return None, None, 0, None
+
+        # Get video metadata
+        title    = f"YouTube Video ({video_id})"
+        duration = 0
+        channel  = "YouTube"
+
+        try:
+            meta = requests.get(
+                "https://api.supadata.ai/v1/youtube/video",
+                params  = {"videoId": video_id},
+                headers = {"x-api-key": SUPADATA_KEY},
+                timeout = 10
+            )
+            if meta.status_code == 200:
+                m        = meta.json()
+                title    = m.get("title",       title)
+                duration = m.get("duration",    0)
+                channel  = m.get("channelName", "YouTube")
+        except:
+            pass
+
+        print(f"   ✅ Supadata success: {title}")
+        return transcript, title, duration, channel
+
+    except Exception as e:
+        print(f"   Supadata failed: {e}")
 
     return None, None, 0, None
 
 
 # ═══════════════════════════════════════════════════════════════
-# METHOD 2 — Invidious API
+# YOUTUBE TRANSCRIPT — Method 3: Invidious Captions
 # ═══════════════════════════════════════════════════════════════
-def download_via_invidious(video_id):
+def get_transcript_invidious(video_id):
+    """
+    Get captions from Invidious public servers.
+    No audio download — just text captions.
+    """
     instances = [
         "https://invidious.io.lol",
-        "https://invidious.privacydev.net",
-        "https://iv.ggtyler.dev",
-        "https://invidious.perennialte.ch",
-        "https://invidious.lunar.icu",
-        "https://invidious.reallyaweso.me",
-        "https://invidious.incogniweb.net",
-        "https://invidious.slipfox.xyz",
         "https://yewtu.be",
         "https://invidious.kavin.rocks",
+        "https://vid.puffyan.us",
         "https://inv.riverside.rocks",
         "https://invidious.nerdvpn.de",
-        "https://yt.artemislena.eu",
-        "https://invidious.flokinet.to",
-        "https://vid.puffyan.us",
-        "https://invidious.namazso.eu",
     ]
 
     for instance in instances:
         try:
-            print(f"   [Method 2] Trying: {instance}")
+            print(f"   [T3] Trying Invidious captions: {instance}")
+
+            # Get video info + caption list
             r = requests.get(
                 f"{instance}/api/v1/videos/{video_id}",
                 timeout = 8,
@@ -185,47 +245,110 @@ def download_via_invidious(video_id):
             if r.status_code != 200:
                 continue
 
-            data    = r.json()
-            title   = data.get("title",         "Unknown")
-            dur     = data.get("lengthSeconds",  0)
-            channel = data.get("author",         "Unknown")
+            data  = r.json()
+            title = data.get("title",  f"YouTube Video ({video_id})")
+            dur   = data.get("lengthSeconds", 0)
+            ch    = data.get("author", "YouTube")
+            caps  = data.get("captions", [])
 
-            # Try adaptiveFormats
-            fmts = data.get("adaptiveFormats", [])
+            if not caps:
+                continue
+
+            # Prefer English captions
+            en_caps = [
+                c for c in caps
+                if "en" in c.get("languageCode","").lower()
+            ]
+            target_cap = en_caps[0] if en_caps else caps[0]
+            cap_url    = target_cap.get("url", "")
+
+            if not cap_url:
+                continue
+
+            cap_r = requests.get(
+                f"{instance}{cap_url}",
+                timeout = 10,
+                headers = {"User-Agent": "Mozilla/5.0"}
+            )
+            if cap_r.status_code != 200:
+                continue
+
+            # Parse caption text — remove XML/HTML tags and timestamps
+            text = cap_r.text
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'&amp;', '&', text)
+            text = re.sub(r'&lt;',  '<', text)
+            text = re.sub(r'&gt;',  '>', text)
+            text = re.sub(r'&quot;','"', text)
+            text = re.sub(r'\s+',   ' ', text).strip()
+
+            if len(text) > 100:
+                print(f"   ✅ Invidious captions success: {instance}")
+                return text, title, int(dur), ch
+
+        except Exception as e:
+            print(f"   Invidious {instance} error: {e}")
+            continue
+
+    return None, None, 0, None
+
+
+# ═══════════════════════════════════════════════════════════════
+# YOUTUBE TRANSCRIPT — Method 4: Groq Whisper via Invidious audio
+# ═══════════════════════════════════════════════════════════════
+def get_transcript_invidious_audio(video_id):
+    """
+    Download audio from Invidious and transcribe with Groq Whisper.
+    Last resort — only if captions are unavailable.
+    """
+    instances = [
+        "https://invidious.io.lol",
+        "https://yewtu.be",
+        "https://invidious.kavin.rocks",
+        "https://vid.puffyan.us",
+    ]
+
+    for instance in instances:
+        try:
+            print(f"   [T4] Trying Invidious audio: {instance}")
+
+            r = requests.get(
+                f"{instance}/api/v1/videos/{video_id}",
+                timeout = 8,
+                headers = {"User-Agent": "Mozilla/5.0"}
+            )
+            if r.status_code != 200:
+                continue
+
+            data  = r.json()
+            title = data.get("title",         f"YouTube Video ({video_id})")
+            dur   = data.get("lengthSeconds",  0)
+            ch    = data.get("author",         "YouTube")
+            fmts  = data.get("adaptiveFormats", [])
+
             audio_fmts = [
                 f for f in fmts
                 if "audio" in f.get("type", "")
             ]
-
-            # Fallback to formatStreams
             if not audio_fmts:
                 fmts = data.get("formatStreams", [])
                 audio_fmts = [
                     f for f in fmts
                     if "audio" in f.get("type", "")
                 ]
-
             if not audio_fmts:
                 continue
 
-            audio_fmts.sort(
-                key     = lambda x: x.get("bitrate", 0),
-                reverse = True
-            )
+            audio_fmts.sort(key=lambda x: x.get("bitrate", 0), reverse=True)
             audio_url = audio_fmts[0].get("url", "")
             if not audio_url:
                 continue
 
-            tmp_webm = os.path.join(
-                tempfile.gettempdir(), f"audio_{video_id}.webm"
-            )
-            tmp_wav = os.path.join(
-                tempfile.gettempdir(), f"audio_{video_id}.wav"
-            )
+            tmp_webm = os.path.join(tempfile.gettempdir(), f"inv_{video_id}.webm")
+            tmp_wav  = os.path.join(tempfile.gettempdir(), f"inv_{video_id}.wav")
 
             for p in [tmp_webm, tmp_wav]:
-                if os.path.exists(p):
-                    os.remove(p)
+                if os.path.exists(p): os.remove(p)
 
             resp = requests.get(
                 audio_url, stream=True, timeout=120,
@@ -240,103 +363,75 @@ def download_via_invidious(video_id):
                     f.write(chunk)
                     size += len(chunk)
 
-            print(f"   Downloaded: {size/1024/1024:.1f} MB")
             if size < 1000:
                 continue
+
+            print(f"   Downloaded: {size/1024/1024:.1f} MB — transcribing...")
 
             os.system(
                 f"ffmpeg -i '{tmp_webm}' -ar 16000 -ac 1 -b:a 32k "
                 f"'{tmp_wav}' -y 2>/dev/null"
             )
-            if os.path.exists(tmp_webm):
-                os.remove(tmp_webm)
+            if os.path.exists(tmp_webm): os.remove(tmp_webm)
 
-            if os.path.exists(tmp_wav) and os.path.getsize(tmp_wav) > 1000:
-                print(f"   ✅ Invidious success: {instance}")
-                return tmp_wav, title, int(dur), channel
+            if not os.path.exists(tmp_wav):
+                continue
 
-        except requests.Timeout:
-            print(f"   Timeout: {instance}")
-            continue
+            transcript, lang = do_transcribe(tmp_wav)
+            if os.path.exists(tmp_wav): os.remove(tmp_wav)
+
+            if transcript and len(transcript) > 50:
+                print(f"   ✅ Invidious audio success: {instance}")
+                return transcript, title, int(dur), ch
+
         except Exception as e:
-            print(f"   Error {instance}: {e}")
+            print(f"   Invidious audio {instance} error: {e}")
             continue
 
     return None, None, 0, None
 
 
 # ═══════════════════════════════════════════════════════════════
-# METHOD 3 — yt-dlp iOS client (last resort)
+# MASTER YOUTUBE PROCESSOR
 # ═══════════════════════════════════════════════════════════════
-def download_via_ytdlp(url):
-    try:
-        import yt_dlp
-        print("   [Method 3] Trying yt-dlp iOS client...")
+def get_youtube_transcript(url, video_id):
+    """
+    Tries 4 methods in order — all free, no bot detection issues.
+    Returns: (transcript, title, duration, channel, lang)
+    """
+    title    = f"YouTube Video ({video_id})"
+    duration = 0
+    channel  = "YouTube"
+    lang     = "en"
 
-        out = os.path.join(tempfile.gettempdir(), "audio_ytdlp")
+    # ── Method 1: youtube-transcript-api (fastest, no API key) ──
+    print("\n[1/4] youtube-transcript-api")
+    transcript = get_transcript_youtube_api(video_id)
+    if transcript:
+        return transcript, title, duration, channel, lang
 
-        opts = {
-            "format"    : "bestaudio/best",
-            "outtmpl"   : out,
-            "noplaylist": True,
-            "postprocessors": [{
-                "key"            : "FFmpegExtractAudio",
-                "preferredcodec" : "wav",
-                "preferredquality": "96",
-            }],
-            # iOS client bypasses bot detection better
-            "extractor_args": {
-                "youtube": {
-                    "player_client": [
-                        "ios",
-                        "android_music",
-                        "android_creator",
-                        "web_creator",
-                    ]
-                }
-            },
-            "quiet"         : True,
-            "no_warnings"   : True,
-            "sleep_interval": 2,
-        }
+    # ── Method 2: Supadata API (needs free API key) ──────────────
+    print("\n[2/4] Supadata API")
+    result = get_transcript_supadata(video_id)
+    if result[0]:
+        transcript, title, duration, channel = result
+        return transcript, title, duration, channel, lang
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info    = ydl.extract_info(url, download=True)
-            title   = info.get("title",   "Unknown")
-            dur     = info.get("duration", 0)
-            channel = info.get("uploader","Unknown")
+    # ── Method 3: Invidious Captions (no API key) ────────────────
+    print("\n[3/4] Invidious captions")
+    result = get_transcript_invidious(video_id)
+    if result[0]:
+        transcript, title, duration, channel = result
+        return transcript, title, duration, channel, lang
 
-        wav = out + ".wav"
-        if os.path.exists(wav) and os.path.getsize(wav) > 1000:
-            print("   ✅ yt-dlp success")
-            return wav, title, dur, channel
+    # ── Method 4: Invidious Audio + Groq Whisper ─────────────────
+    print("\n[4/4] Invidious audio + Groq Whisper")
+    result = get_transcript_invidious_audio(video_id)
+    if result[0]:
+        transcript, title, duration, channel = result
+        return transcript, title, duration, channel, lang
 
-    except Exception as e:
-        print(f"   yt-dlp failed: {e}")
-
-    return None, None, 0, None
-
-
-# ═══════════════════════════════════════════════════════════════
-# MASTER DOWNLOAD — tries all 3 methods
-# ═══════════════════════════════════════════════════════════════
-def download_audio(url, video_id):
-    # Method 1: pytubefix
-    wav, title, dur, channel = download_via_pytubefix(url)
-    if wav:
-        return wav, title, dur, channel
-
-    # Method 2: Invidious
-    wav, title, dur, channel = download_via_invidious(video_id)
-    if wav:
-        return wav, title, dur, channel
-
-    # Method 3: yt-dlp iOS
-    wav, title, dur, channel = download_via_ytdlp(url)
-    if wav:
-        return wav, title, dur, channel
-
-    return None, None, 0, None
+    return None, title, duration, channel, lang
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -362,9 +457,8 @@ def clean_transcript(text):
     }
     for w, c in counts.items():
         if c > threshold and w not in whitelist:
-            text = re.sub(
-                rf'\b{re.escape(w)}\b', '', text, flags=re.IGNORECASE
-            )
+            text = re.sub(rf'\b{re.escape(w)}\b', '', text, flags=re.IGNORECASE)
+
     return re.sub(r'\s+', ' ', text).strip()
 
 
@@ -394,6 +488,16 @@ def detect_video_type(transcript, title):
     return "educational"
 
 
+def detect_language(text):
+    sample = text[:300]
+    if any(c in sample for c in 'அஆஇஈஉஊஎஏஐஒஓஔ'): return 'ta'
+    if any(c in sample for c in 'अआइईउऊएऐओऔ'):      return 'hi'
+    if any(c in sample for c in 'అఆఇఈఉఊఎఏఐఒఓ'):     return 'te'
+    if any(c in sample for c in 'അആഇഈഉഊഎഏഐഒ'):      return 'ml'
+    if any(c in sample for c in 'ಅಆಇಈಉಊಎಏಐಒ'):      return 'kn'
+    return 'en'
+
+
 # ═══════════════════════════════════════════════════════════════
 # ROUTES
 # ═══════════════════════════════════════════════════════════════
@@ -401,7 +505,7 @@ def detect_video_type(transcript, title):
 def home():
     return jsonify({
         "status" : "✅ VideoMind AI Backend is running",
-        "version": "4.0",
+        "version": "5.0",
         "routes" : [
             "GET  /api/health",
             "POST /api/process-url",
@@ -415,7 +519,11 @@ def home():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "mode": "groq-whisper-api"})
+    return jsonify({
+        "status"      : "ok",
+        "version"     : "5.0",
+        "supadata_key": "set" if SUPADATA_KEY else "not set",
+    })
 
 
 # ── Process YouTube URL ──────────────────────────────────────────────────────
@@ -429,54 +537,51 @@ def process_url():
         if not data:
             return jsonify({"error": "Invalid request body"}), 400
 
-        url = data.get("url", "").strip()
+        url = data.get("url", "").strip().strip('"').strip("'")
         if not url:
             return jsonify({"error": "No URL provided"}), 400
-
-        # Clean URL — remove extra spaces or characters
-        url = url.strip().strip('"').strip("'")
 
         video_id = extract_video_id(url)
         if not video_id:
             return jsonify({
-                "error": "Invalid YouTube URL. Please use format: "
-                         "https://www.youtube.com/watch?v=XXXXXXXXXXX"
+                "error": (
+                    "Invalid YouTube URL. "
+                    "Please use: https://www.youtube.com/watch?v=XXXXXXXXXXX"
+                )
             }), 400
 
         print(f"\n{'='*50}")
-        print(f"Processing video ID: {video_id}")
-        print(f"URL: {url}")
+        print(f"Processing: {video_id}")
         print(f"{'='*50}")
 
-        wav, title, duration, channel = download_audio(url, video_id)
+        transcript, title, duration, channel, lang = get_youtube_transcript(
+            url, video_id
+        )
 
-        if not wav:
+        if not transcript or len(transcript.strip()) < 20:
             return jsonify({
                 "error": (
-                    "All download methods failed for this video. "
-                    "Please try a different video or try again in 5 minutes."
+                    "Could not get transcript for this video. "
+                    "This usually means the video has no captions/subtitles. "
+                    "Please try a video that has captions enabled, "
+                    "or upload the video file directly using 'Upload File'."
                 )
             }), 500
 
-        print(f"Transcribing: {title}")
-        transcript, lang = do_transcribe(wav)
-
-        if os.path.exists(wav):
-            os.remove(wav)
-
-        if not transcript or len(transcript.strip()) < 10:
-            return jsonify({"error": "Transcription failed — audio may be empty"}), 500
+        # Detect language if not already detected
+        if lang == "en":
+            lang = detect_language(transcript)
 
         vtype = detect_video_type(transcript, title)
 
-        print(f"✅ Done: {title} | {lang} | {vtype}")
+        print(f"✅ Done: {title} | {lang} | {vtype} | {len(transcript.split())} words")
 
         return jsonify({
             "success"          : True,
             "transcript"       : transcript,
             "video_title"      : title,
-            "channel"          : channel or "Unknown",
-            "duration"         : f"{duration // 60}m {duration % 60}s",
+            "channel"          : channel,
+            "duration"         : f"{duration // 60}m {duration % 60}s" if duration else "—",
             "detected_language": lang,
             "word_count"       : len(transcript.split()),
             "video_type"       : vtype,
@@ -497,40 +602,36 @@ def process_file():
         if "video" not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
-        f         = request.files["video"]
-        filename  = f.filename or "video.mp4"
-        tmp_v     = os.path.join(tempfile.gettempdir(), "upload_video.mp4")
-        tmp_a     = os.path.join(tempfile.gettempdir(), "upload_audio.wav")
+        f        = request.files["video"]
+        filename = f.filename or "video.mp4"
+        tmp_v    = os.path.join(tempfile.gettempdir(), "upload_video.mp4")
+        tmp_a    = os.path.join(tempfile.gettempdir(), "upload_audio.wav")
 
-        # Clean old files
         for p in [tmp_v, tmp_a]:
-            if os.path.exists(p):
-                os.remove(p)
+            if os.path.exists(p): os.remove(p)
 
         f.save(tmp_v)
         size_mb = os.path.getsize(tmp_v) / 1024 / 1024
         print(f"Uploaded: {filename} ({size_mb:.1f} MB)")
 
-        # Extract audio
-        ret = os.system(
+        os.system(
             f"ffmpeg -i '{tmp_v}' -ar 16000 -ac 1 -b:a 32k "
             f"'{tmp_a}' -y 2>/dev/null"
         )
-
-        if os.path.exists(tmp_v):
-            os.remove(tmp_v)
+        if os.path.exists(tmp_v): os.remove(tmp_v)
 
         if not os.path.exists(tmp_a):
             return jsonify({"error": "Audio extraction failed"}), 500
 
         transcript, lang = do_transcribe(tmp_a)
-
-        if os.path.exists(tmp_a):
-            os.remove(tmp_a)
+        if os.path.exists(tmp_a): os.remove(tmp_a)
 
         if not transcript or len(transcript.strip()) < 10:
-            return jsonify({"error": "Transcription failed — video may have no audio"}), 500
+            return jsonify({
+                "error": "Transcription failed — video may have no audio"
+            }), 500
 
+        lang  = detect_language(transcript) if lang == "en" else lang
         vtype = detect_video_type(transcript, filename)
 
         return jsonify({
