@@ -678,7 +678,8 @@ async function handleProcessed(d) {
   $('r-vtype').textContent = typeLabel[d.video_type]||'📚 Educational';
 
   // Get summary
-  try {
+  // Find this in handleProcessed:
+try {
     const r = await fetch(API+'/api/summarize',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({transcript:d.transcript,video_title:d.video_title,video_type:d.video_type})
@@ -699,9 +700,49 @@ async function handleProcessed(d) {
     $('r-summary').textContent = 'Summary generation failed. You can still use Q&A.';
   }
 
-  setStep(3);
-  showPanel('results');
-}
+// Replace with this:
+  try {
+    const r   = await fetch(API+'/api/summarize',{
+      method :'POST',
+      headers:{'Content-Type':'application/json'},
+      body   : JSON.stringify({
+        transcript : d.transcript,
+        video_title: d.video_title,
+        video_type : d.video_type
+      })
+    });
+
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const s = await r.json();
+
+    console.log('Summary response:', s); // debug
+
+    if(d.video_type === 'song') {
+      $('panel-song').style.display    = 'block';
+      $('panel-summary').style.display = 'none';
+    } else {
+      $('panel-song').style.display    = 'none';
+      $('panel-summary').style.display = 'block';
+
+      const summaryText = s.summary || s.message || s.error || 'No summary generated.';
+      state.summary = summaryText;
+
+      // ✅ Use innerHTML with line breaks instead of textContent
+      $('r-summary').innerHTML = summaryText
+        .replace(/\n/g, '<br>')
+        .replace(/\* /g, '• ');
+
+      $('summary-meta').textContent = s.word_count
+        ? `· ${s.word_count} words analyzed`
+        : '';
+    }
+
+  } catch(e) {
+    console.error('Summary error:', e);
+    $('r-summary').innerHTML =
+      '<span style="color:var(--accent3)">Summary failed: ' + e.message +
+      '. You can still use Q&A below.</span>';
+  }
 
 // ── Q&A ───────────────────────────────────────────────────────────────────────
 async function sendQuestion() {
