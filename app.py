@@ -10,7 +10,7 @@ CORS(app, resources={
     r"/api/*": {
         "origins"      : "*",
         "methods"      : ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
+        "allow_headers": ["Content-Type"] 
     }
 })
 
@@ -477,6 +477,51 @@ def get_transcript_invidious_audio(video_id):
 
     return None, None, 0, None
 
+# ═══════════════════════════════════════════════════════════════
+# ✅ METHOD 6 — yt-dlp + Groq Whisper (FINAL FIX 🔥)
+# Works for ANY video (no captions needed)
+# ═══════════════════════════════════════════════════════════════
+def get_transcript_ytdlp(video_id):
+    try:
+        print("   [T6] yt-dlp audio + Whisper")
+
+        import subprocess
+
+        tmp_audio = os.path.join(tempfile.gettempdir(), f"yt_{video_id}.mp3")
+
+        # Remove old file
+        if os.path.exists(tmp_audio):
+            os.remove(tmp_audio)
+
+        # Download audio using yt-dlp
+        cmd = [
+            "yt-dlp",
+            "-x",
+            "--audio-format", "mp3",
+            "-o", tmp_audio,
+            f"https://www.youtube.com/watch?v={video_id}"
+        ]
+
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        if not os.path.exists(tmp_audio):
+            print("   yt-dlp download failed")
+            return None, None, 0, None
+
+        print("   Audio downloaded — transcribing...")
+
+        transcript, lang = do_transcribe(tmp_audio)
+
+        os.remove(tmp_audio)
+
+        if transcript and len(transcript.strip()) > 30:
+            print(f"   ✅ T6 success! ({len(transcript.split())} words)")
+            return transcript, f"YouTube Video ({video_id})", 0, "YouTube"
+
+    except Exception as e:
+        print(f"   T6 failed: {e}")
+
+    return None, None, 0, None
 
 # ═══════════════════════════════════════════════════════════════
 # MASTER YOUTUBE PROCESSOR
@@ -532,6 +577,16 @@ def get_youtube_transcript(url, video_id):
 
     return None, title, duration, channel, lang
 
+    # Method 6: yt-dlp + Whisper (FINAL FALLBACK 🔥)
+    print("\n[6/6] yt-dlp audio + Whisper")
+    result = get_transcript_ytdlp(video_id)
+    if result[0]:
+        transcript, t, dur, ch = result
+        if t:   title    = t
+        if ch:  channel  = ch
+        if dur: duration = dur
+        lang = detect_language(transcript)
+        return transcript, title, duration, channel, lang
 
 # ═══════════════════════════════════════════════════════════════
 # HELPERS
