@@ -1,6 +1,6 @@
 # 🚀 VideoMind AI — Smart YouTube Video Analyzer
 
-VideoMind AI is an advanced AI-powered system that extracts, transcribes, and summarizes YouTube videos — even without captions — using multiple fallback strategies and AI models.
+VideoMind AI is an advanced AI-powered system that extracts, transcribes, and summarizes YouTube videos - even without captions - using multiple fallback strategies and AI models.
 
 ---
 
@@ -11,10 +11,8 @@ VideoMind AI is an advanced AI-powered system that extracts, transcribes, and su
 * Extract transcript from YouTube videos
 * Supports:
 
-  * English videos ✅
-  * Tamil / Telugu / Hindi videos ✅
-  * Videos without captions ✅
-
+  * English videos only ✅
+  
 ## 🧠 AI Transcription (Multi-Engine System)
 
 * Method 1: YouTube Transcript API
